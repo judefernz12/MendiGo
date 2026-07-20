@@ -1,0 +1,120 @@
+[gd_scene load_steps=3 format=3 uid="uid://ojti66d13tt7"]
+
+[ext_resource type="Script" uid="uid://cmxdji2x2l54p" path="res://scripts/ui/Lobby.gd" id="1_j7rk1"]
+[ext_resource type="Theme" uid="uid://dtmendithm41a" path="res://assets/ui/app_theme.tres" id="2_theme"]
+
+[node name="Lobby" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_j7rk1")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.063, 0.098, 0.078, 1)
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Card" type="PanelContainer" parent="CenterContainer"]
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card"]
+layout_mode = 2
+theme_override_constants/margin_left = 36
+theme_override_constants/margin_top = 26
+theme_override_constants/margin_right = 36
+theme_override_constants/margin_bottom = 26
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
+custom_minimum_size = Vector2(400, 0)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_type_variation = &"TitleLabel"
+theme_override_font_sizes/font_size = 30
+text = "Lobby"
+horizontal_alignment = 1
+
+[node name="CodeHeader" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "ROOM CODE"
+horizontal_alignment = 1
+
+[node name="RoomCodeLabel" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.949, 0.831, 0.541, 1)
+theme_override_font_sizes/font_size = 34
+text = "-----"
+horizontal_alignment = 1
+
+[node name="CopyCodeButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+text = "Copy Code"
+
+[node name="Spacer1" type="Control" parent="CenterContainer/Card/Margin/VBox"]
+custom_minimum_size = Vector2(0, 4)
+layout_mode = 2
+
+[node name="PlayersHeader" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "PLAYERS"
+horizontal_alignment = 1
+
+[node name="PlayerList" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HintLabel" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "Empty seats are filled with bots when the host starts."
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="Spacer2" type="Control" parent="CenterContainer/Card/Margin/VBox"]
+custom_minimum_size = Vector2(0, 4)
+layout_mode = 2
+
+[node name="ReadyButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+text = "Ready"
+
+[node name="StartGameButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_type_variation = &"AccentButton"
+text = "Start Game"
+
+[node name="LeaveButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Leave Room"

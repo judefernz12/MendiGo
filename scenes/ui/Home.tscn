@@ -1,0 +1,89 @@
+[gd_scene load_steps=3 format=3 uid="uid://dvoyd61jrcicb"]
+
+[ext_resource type="Script" uid="uid://doortti20ifu" path="res://scripts/ui/Home.gd" id="1_ionhu"]
+[ext_resource type="Theme" uid="uid://dtmendithm41a" path="res://assets/ui/app_theme.tres" id="2_theme"]
+
+[node name="Home" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_ionhu")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.063, 0.098, 0.078, 1)
+
+[node name="CenterContainer" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Card" type="PanelContainer" parent="CenterContainer"]
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card"]
+layout_mode = 2
+theme_override_constants/margin_left = 40
+theme_override_constants/margin_top = 32
+theme_override_constants/margin_right = 40
+theme_override_constants/margin_bottom = 32
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_type_variation = &"TitleLabel"
+text = "MendiGO"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "Mendicot with friends, online"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="CenterContainer/Card/Margin/VBox"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+
+[node name="NameInput" type="LineEdit" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+placeholder_text = "Your name"
+alignment = 1
+max_length = 16
+
+[node name="PlayOnlineButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_type_variation = &"AccentButton"
+text = "Play Online"
+
+[node name="HowToPlayButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+text = "How To Play"
+
+[node name="ExitButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+text = "Exit"

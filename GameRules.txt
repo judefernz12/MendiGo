@@ -1,0 +1,1018 @@
+Create a complete multiplayer online trick-taking card game inspired by Mendicot using Godot 4.x with ENet networking. The game must support Android, Web, and Desktop. The implementation must be scalable, server-authoritative, perspective-correct for every player, optimized for mobile devices, and built in a modular way for future expansion.
+
+========================================
+CORE GAME OVERVIEW
+==================
+
+The game is a multiplayer team-based trick-taking card game with hidden/open trump mechanics, dealer selection, dealer rotation, court wins, score accumulation, spectators, reconnect support, bots, and multiple player-count modes.
+
+The game must support:
+
+* 4 players
+* 6 players
+* 8 players
+
+The host must choose the room format before creating or starting the room:
+
+* player count: 4, 6, or 8
+* gameplay direction: counter-clockwise by default, clockwise optional
+* target score: default 15, configurable
+* private room code or public matchmaking
+* bots enabled/disabled
+* spectators enabled/disabled
+* touch interaction mode defaults
+* card/table theme defaults
+
+Default gameplay direction:
+
+* counter-clockwise
+
+The game must be built so 4-player works first for V1, but the rules and architecture must not be hardcoded only for 4 players. The design must already support 6-player and 8-player variants.
+
+========================================
+PLAYER COUNTS, DECKS, AND CARD COUNTS
+=====================================
+
+4-player mode:
+
+* use full 52-card deck
+* no jokers
+* each player receives 13 cards
+* deal pattern: 5 + 4 + 4
+
+6-player mode:
+
+* use 48-card deck
+* remove all four 2s from the deck
+* no jokers
+* each player receives 8 cards
+* deal pattern: 4 + 4
+
+8-player mode:
+
+* use 48-card deck
+* remove all four 2s from the deck
+* no jokers
+* each player receives 6 cards
+* deal pattern: 3 + 3
+
+Deck creation must depend on selected player count:
+
+* 4 players = 52 cards
+* 6 players = 48 cards, remove 2s
+* 8 players = 48 cards, remove 2s
+
+========================================
+CARD RANKING
+============
+
+Card rank order from highest to lowest:
+
+A > K > Q > J > 10 > 9 > 8 > 7 > 6 > 5 > 4 > 3 > 2
+
+For 6-player and 8-player modes, 2s are removed, so lowest card is 3.
+
+This ranking applies to:
+
+* dealer selection draw
+* trick winner comparison
+* sorting
+* bot decision logic
+
+========================================
+TEAM STRUCTURE
+==============
+
+Teams are based on alternating seats.
+
+For 4 players:
+
+* Team A: seat_0 + seat_2
+* Team B: seat_1 + seat_3
+
+For 6 players:
+
+* Team A: seat_0 + seat_2 + seat_4
+* Team B: seat_1 + seat_3 + seat_5
+
+For 8 players:
+
+* Team A: seat_0 + seat_2 + seat_4 + seat_6
+* Team B: seat_1 + seat_3 + seat_5 + seat_7
+
+Team logic must be calculated from absolute seat IDs, not local visual names.
+
+========================================
+SEAT SYSTEM AND PLAYER PERSPECTIVE
+==================================
+
+The game must use absolute seat IDs internally:
+
+* 4 players: seat_0 to seat_3
+* 6 players: seat_0 to seat_5
+* 8 players: seat_0 to seat_7
+
+Clients must render the table using local visual perspective.
+
+Every player must see themselves at the bottom of the screen.
+
+For 4 players, local view labels can be:
+
+* my
+* right
+* top
+* left
+
+For 6 and 8 players, visual positions must expand around the table:
+
+* bottom/local player
+* lower-right
+* right/top-right
+* top
+* top-left
+* left/lower-left
+  depending on player count
+
+Absolute seats must be remapped to local visual slots on each client.
+
+Example for 4-player:
+If local player is seat_2:
+
+* seat_2 renders as local bottom player
+* seat_3 renders to the next visual position based on selected play direction
+* seat_0 and seat_1 render relative to that perspective
+
+All gameplay state must use absolute seat IDs:
+
+* dealer
+* trump holder
+* current turn
+* lead player
+* played cards
+* trick winner
+* disconnected player
+* spectator view
+* bot seat
+* score ownership
+
+The client must only convert absolute seat IDs to visual positions for display.
+
+Never use local names like “my”, “right”, “top”, or “left” as authoritative gameplay seats.
+
+========================================
+GAMEPLAY DIRECTION
+==================
+
+The host can choose play direction before the match:
+
+* counter-clockwise default
+* clockwise optional
+
+Direction affects:
+
+* dealing order
+* next player turn order
+* trump holder selection
+* dealer rotation
+* trick progression
+* visual seating order
+* next dealer logic
+
+The system must not assume clockwise or counter-clockwise permanently. It must read room setting.
+
+Default for V1:
+
+* counter-clockwise
+
+========================================
+FIRST GAME DEALER SELECTION
+===========================
+
+Before the first game of a match, dealer must be decided using a shared dealer-selection draw.
+
+This dealer-selection phase happens only for the first game in a match.
+
+Dealer draw rules:
+
+* server creates one shared set of random cards equal to player count
+* 4-player mode: 4 dealer-draw cards
+* 6-player mode: 6 dealer-draw cards
+* 8-player mode: 8 dealer-draw cards
+* all dealer-draw cards must have different ranks
+* these cards are not taken from the actual match deck
+* they exist only to decide dealer
+* no two dealer-draw cards may share the same rank
+
+Dealer draw selection:
+
+* cards appear face-down in the center of the table
+* all players may choose one remaining card
+* first valid server-received claim gets the card
+* once selected, that card becomes unavailable and unclickable for everyone
+* the selected card animates to the choosing player’s reveal/play area
+* then it flips face-up publicly
+* every player sees the animation from their own perspective
+* claimed cards must not reanimate every time another player selects a card
+* already claimed cards must stay fixed in their revealed location
+
+After all players have chosen:
+
+* player with highest card becomes dealer
+
+Dealer draw ranking:
+A > K > Q > J > 10 > 9 > 8 > 7 > 6 > 5 > 4 > 3 > 2
+
+Since dealer-draw ranks are unique, no tie is possible.
+
+========================================
+DEALER AND TRUMP HOLDER
+=======================
+
+Dealer:
+
+* shuffles
+* distributes cards
+
+The game/server handles all fairness and rule enforcement.
+
+Trump holder:
+
+* the first served player becomes trump chooser
+* this is the player immediately after dealer according to selected play direction
+* if direction is counter-clockwise, use counter-clockwise next player
+* if direction is clockwise, use clockwise next player
+
+Trump holder receives the first batch and then chooses trump mode:
+
+* Closed Trump
+* Open Trump
+
+========================================
+DEALING PATTERNS
+================
+
+4-player mode:
+
+* deal 5 cards to each player first
+* trump holder chooses trump mode and, if closed mode, chooses one card from first 5 as hidden trump
+* then deal 4 cards to each player
+* then deal final 4 cards to each player
+* total: 13 cards each
+
+6-player mode:
+
+* deal 4 cards to each player first
+* trump holder chooses trump mode and, if closed mode, chooses one card from first 4 as hidden trump
+* then deal 4 more cards to each player
+* total: 8 cards each
+
+8-player mode:
+
+* deal 3 cards to each player first
+* trump holder chooses trump mode and, if closed mode, chooses one card from first 3 as hidden trump
+* then deal 3 more cards to each player
+* total: 6 cards each
+
+Important:
+
+* the deal must pause after first batch so trump holder can choose open/closed trump
+* if closed trump is chosen, trump holder selects one card from first batch to hide
+* while trump holder is choosing, other players see a waiting message
+* only trump holder can interact with the trump selection UI
+* after selection, dealing continues
+
+========================================
+TRUMP MODES
+===========
+
+There are two trump modes:
+
+* Closed Trump
+* Open Trump
+
+The trump holder chooses which mode to use after receiving the first batch.
+
+========================================
+CLOSED TRUMP MODE
+=================
+
+Closed Trump flow:
+
+* trump holder selects one card from first dealt batch
+* that card is hidden/set aside
+* the hidden card is removed from active hand temporarily
+* the hidden card is not visible to anyone, including trump holder, after selection
+* it remains face-down in a hidden trump area
+* game continues with no active trump suit until hidden trump is revealed
+
+Who may reveal:
+
+* any player who cannot follow suit may reveal hidden trump
+* the player must be on their turn
+* revealing is optional, not compulsory
+
+Reveal behavior:
+
+* hidden trump card flips/reveals publicly for 3 seconds
+* all players see the revealed suit
+* trump suit becomes active permanently for the rest of the game
+* trump icon/logo appears for everyone
+* hidden trump card then returns to the original trump holder’s hand
+* if the revealing player is forced to play after reveal, legal play must account for the newly returned trump card if it belongs to that player
+* after reveal, trump remains active until game ends
+
+Closed trump important behavior:
+
+* player cannot reveal if they can follow lead suit
+* player may choose not to reveal and instead discard any legal non-suit card
+* reveal must be synchronized for all players
+* play button/input must be disabled during reveal animation
+* timer should pause or reset during trump reveal
+
+========================================
+OPEN TRUMP MODE
+===============
+
+Open Trump does NOT mean a card is selected and shown at the start.
+
+Open Trump rules:
+
+* no card is hidden
+* game starts with no active trump suit
+* no trump card is set aside
+* all cards remain in players’ hands
+* first time any player cannot follow lead suit and plays a non-lead-suit card, that played card’s suit becomes trump
+* trump becomes active from that moment for the rest of the game
+* trump icon/logo appears for everyone
+* after trump is activated, highest trump wins future tricks
+
+Example:
+
+* lead suit is hearts
+* player has no hearts
+* player plays spades
+* spades becomes trump for the rest of the game
+
+If a player cannot follow suit but plays a non-lead-suit card in open trump mode, that suit becomes trump automatically.
+
+========================================
+FOLLOW SUIT RULE
+================
+
+Players must follow lead suit if possible.
+
+If player has lead suit:
+
+* player must play a card of lead suit
+
+If player does not have lead suit:
+
+* player may play any card
+* in closed trump mode, player may optionally reveal hidden trump before playing
+* in open trump mode, the first non-lead-suit card played activates trump
+
+A player may never ignore lead suit if they have it.
+
+========================================
+TRICK WINNER LOGIC
+==================
+
+Each trick consists of one card played by every active player.
+
+4-player trick:
+
+* 4 cards
+
+6-player trick:
+
+* 6 cards
+
+8-player trick:
+
+* 8 cards
+
+Winner logic:
+
+1. If trump is active and one or more trump cards were played:
+
+   * highest trump wins
+2. Otherwise:
+
+   * highest card of lead suit wins
+
+Winner of trick leads next trick.
+
+========================================
+GAME END CONDITION
+==================
+
+A game/round ends when all cards have been played.
+
+Then calculate:
+
+* number of 10s captured by each team
+* number of tricks captured by each team
+
+Court:
+
+* if one team captures all four 10s
+* court is awarded regardless of total tricks won
+
+Normal win:
+
+* if no team captured all four 10s
+* team with more 10s wins
+
+Tie:
+
+* if teams captured equal number of 10s
+* team with more tricks won wins
+
+Score:
+
+* Normal win = 2 points
+* Court = 5 points
+
+Match ends when a team reaches target score.
+
+Default target score:
+
+* 15 points
+
+Host may configure:
+
+* 12
+* 15
+* 21
+* custom later
+
+========================================
+DEALER ROTATION AFTER EACH GAME
+===============================
+
+Dealer rotation depends on:
+
+* current dealer’s team
+* winning team
+* whether win was normal or court
+* play direction
+
+Rules:
+If dealer’s team wins normal:
+
+* dealer moves to next player in play direction
+
+If dealer’s team loses normal:
+
+* same dealer deals again
+
+If dealer’s team wins court:
+
+* dealer moves to next player in play direction
+
+If dealer’s team loses court:
+
+* skip next player in play direction
+* player after next becomes dealer
+
+This must work for 4, 6, and 8 players.
+
+========================================
+SCORING UI
+==========
+
+Scoreboard must show:
+
+* Team A score
+* Team B score
+* current game winner
+* court/normal status
+* 10s captured per team
+* tricks captured per team
+* current dealer
+* current trump status
+* target score
+
+========================================
+ROOM AND LOBBY SYSTEM
+=====================
+
+Required lobby features:
+
+* player name
+* create private room
+* join by code
+* public matchmaking
+* friends invite
+* room code copy
+* player count selector: 4 / 6 / 8
+* gameplay direction selector: counter-clockwise default, clockwise optional
+* target score selector: default 15
+* bot fill toggle
+* spectator toggle
+* ready button
+* host start button
+* player slots
+* connection status
+
+Only host can:
+
+* change settings
+* start game
+
+Non-host players:
+
+* can ready/unready
+* cannot start game
+* cannot change room settings
+
+Lobby must update immediately when:
+
+* player joins
+* player leaves
+* ready state changes
+* host changes setting
+* bot fills seat
+* host starts match
+
+========================================
+NETWORKING ARCHITECTURE
+=======================
+
+Use server-authoritative networking.
+
+Recommended:
+
+* Godot 4 ENet
+* dedicated headless server
+* Fly.io or similar for global hosting
+
+Server responsibilities:
+
+* room creation
+* matchmaking
+* public lobby list
+* private room codes
+* assigning absolute seat IDs
+* validating actions
+* dealer draw
+* dealer selection
+* trump mode choice
+* shuffling
+* dealing
+* hidden trump state
+* open trump activation
+* turn order
+* trick resolution
+* scoring
+* dealer rotation
+* reconnect
+* spectators
+* bots
+* anti-cheat enforcement
+
+Client responsibilities:
+
+* input
+* UI rendering
+* animations
+* local camera/perspective remapping
+* visual reconstruction from server state
+* sending action requests
+
+Clients must never authoritatively:
+
+* shuffle
+* deal
+* choose winner
+* modify score
+* force turn
+* reveal hidden cards
+* decide trump
+* resolve trick
+
+========================================
+STATE MODEL
+===========
+
+Use a single authoritative match state.
+
+State should contain:
+
+* room_id
+* match_id
+* player_count
+* target_score
+* play_direction
+* phase
+* players
+* seats
+* teams
+* dealer_seat_id
+* trump_holder_seat_id
+* trump_mode
+* trump_active
+* trump_suit
+* hidden_trump_card
+* hidden_trump_revealed
+* hands by absolute seat ID
+* trick_cards
+* current_turn_seat_id
+* lead_suit
+* captured_tricks
+* captured_10s
+* scores
+* timers
+* disconnected players
+* spectators
+* animation events
+
+Clients receive:
+
+* snapshots
+* action events
+* animation events
+
+Clients render from state.
+
+========================================
+MATCH PHASES
+============
+
+Recommended phases:
+
+* lobby
+* dealer_draw
+* dealer_decided
+* first_batch_deal
+* trump_mode_choice
+* closed_trump_card_choice
+* remaining_deal
+* playing
+* trump_reveal
+* trick_resolve
+* game_result
+* match_result
+* reconnecting
+
+Every phase must have:
+
+* allowed actions
+* server validation
+* client UI state
+* animation state
+
+========================================
+ACTION VALIDATION
+=================
+
+Server validates every action:
+
+* player belongs to room
+* player owns seat
+* correct phase
+* correct turn
+* card belongs to player
+* card is playable
+* follow suit respected
+* trump reveal allowed
+* card not already played
+* player not spectator
+* disconnected player cannot act unless reconnected
+
+========================================
+RECONNECT SYSTEM
+================
+
+If player disconnects:
+
+* show disconnected popup
+* pause briefly or allow bot takeover based on settings
+* keep player seat reserved
+* allow reconnect using player ID/session token
+* send full snapshot on reconnect
+* rebuild visual scene from snapshot
+
+Reconnect must restore:
+
+* hands
+* trick cards
+* hidden trump state
+* trump icon
+* dealer
+* current turn
+* timer
+* scores
+* selected settings
+* game phase
+* captured piles
+* animations where possible
+
+========================================
+SPECTATOR SYSTEM
+================
+
+Spectators can:
+
+* join room as watcher
+* watch played cards
+* watch score
+* watch trump status
+* watch animations
+
+Spectators cannot:
+
+* see player hands
+* see hidden trump before reveal
+* interact with game
+* influence server state
+
+========================================
+BOT SYSTEM
+==========
+
+Bots may fill empty seats.
+
+Bots act server-side only.
+
+Bots must:
+
+* follow suit
+* obey trump rules
+* reveal hidden trump only when allowed
+* play legal cards
+* act after short delay
+* act automatically when timer expires
+* replace disconnected players temporarily if setting enabled
+
+Bot decision quality can be simple for V1.
+
+========================================
+TURN TIMER
+==========
+
+Each player has turn timer.
+
+Timer behavior:
+
+* starts at beginning of player turn
+* pauses during animations such as trump reveal
+* resets after trump reveal if needed
+* expires into server-side autoplay
+* visible to all players
+
+Timer UI:
+
+* circular countdown
+* glow effect
+* green-to-red transition near final 5 seconds
+* fade in/out when turn changes
+
+========================================
+CARD SORTING
+============
+
+Sorting is manual only.
+
+Player can press sort button.
+
+Sorting rules:
+
+* group by suit
+* sort each suit descending by rank
+* arrange suit groups with alternating colors where possible
+* avoid same-color suit groups merging visually
+* do not auto-sort after deal
+* do not auto-sort after trump reveal unless user setting allows it
+
+Default:
+
+* user chooses when to sort
+
+========================================
+CARD CONTROLS
+=============
+
+Support two control modes selectable in settings.
+
+Mode 1:
+
+* tap once to select
+* tap again to play
+
+Mode 2:
+
+* swipe/drag card toward play area to play
+
+Additional:
+
+* hold card to zoom
+* optional haptic feedback
+* large touch targets
+* Android and Web support
+* mouse click support on Web/Desktop
+
+========================================
+VISUAL DESIGN
+=============
+
+Style:
+
+* minimalist
+* clean
+* readable
+* mobile-friendly
+
+Camera:
+
+* fixed top camera
+* player always at bottom
+* no camera rotation required, instead remap seats visually
+
+Cards:
+
+* support custom PNG card fronts
+* support selectable card backs
+* card backs chosen in settings
+
+Table:
+
+* simple clean table
+* clear trick center
+* clear player hands
+* clear captured piles
+* clear trump indicator
+* clear turn indicator
+
+========================================
+ANIMATIONS
+==========
+
+Required animations:
+
+* card deal
+* dealer draw selection
+* card move to reveal slot
+* card flip reveal
+* hidden trump reveal
+* hidden trump return to hand
+* trump icon pop/fade
+* card play to trick slot
+* trick capture to team pile
+* captured 10 display
+* turn timer fade
+* reconnect rebuild transition
+
+Animation rules:
+
+* animations must not desync gameplay state
+* server state is authoritative
+* clients may animate but must be able to snap/rebuild from state
+* already-claimed dealer draw cards must not reanimate repeatedly
+* cards should not duplicate during rebuild
+
+========================================
+CAPTURED PILES
+==============
+
+When a team wins trick:
+
+* played cards move to that team’s captured pile
+* captured pile should stack with slight offset
+* if trick contains 10s, show visible 10 indicators on pile
+* otherwise show normal facedown stack
+* stacking must be visually clear and not overlap completely
+
+========================================
+MOBILE AND WEB REQUIREMENTS
+===========================
+
+Android:
+
+* touch controls
+* large buttons
+* optional haptic feedback
+* efficient rendering
+* portrait or landscape support depending final design
+* Play Store export
+
+Web:
+
+* mouse click
+* touch browser support
+* responsive layout
+* web deployment support
+
+Desktop:
+
+* mouse support
+
+========================================
+SETTINGS
+========
+
+Settings should include:
+
+* player name
+* card back theme
+* table theme
+* control mode
+* haptics on/off
+* sound on/off
+* music on/off
+* language later
+* graphics quality later
+
+Room settings should include:
+
+* player count
+* play direction
+* target score
+* private/public
+* bots
+* spectators
+
+========================================
+CHAT AND EMOTES
+===============
+
+Include:
+
+* simple room chat
+* in-game quick emotes
+* mute option
+* safe chat handling later
+
+========================================
+MATCHMAKING
+===========
+
+Support:
+
+* private room code
+* public matchmaking
+* friends invite
+* bots filling missing seats
+
+V1 can prioritize:
+
+* room code
+* 4-player mode
+* bots
+
+Architecture must allow:
+
+* 6-player and 8-player public rooms later
+
+========================================
+ANTI-CHEAT AND FAIRNESS
+=======================
+
+The server must prevent:
+
+* invalid card plays
+* playing out of turn
+* seeing hidden cards
+* forcing trump
+* changing score
+* duplicate card claims
+* duplicate plays
+* wrong dealer selection
+* wrong trick winner
+* client-side hand modification
+
+========================================
+V1 PRIORITY
+===========
+
+V1 should focus on:
+
+* 4-player room-code multiplayer
+* Android and Web
+* fixed counter-clockwise default
+* dealer draw
+* closed/open trump
+* full trick gameplay
+* score to 15
+* bots for empty seats
+* reconnect support basic
+* spectator support basic
+* clean UI
+
+V2:
+
+* 6-player mode
+* 8-player mode
+* public matchmaking polish
+* ranked system
+* advanced bots
+* cosmetics
+* tournaments
+
+However, V1 code must not hardcode assumptions that block 6/8-player expansion.
+
+========================================
+FINAL GOAL
+==========
+
+The final game should feel like all players are sitting around the same table from their own perspective, sharing one synchronized match. The server owns the truth. Every player sees their own hand at the bottom, opponents positioned correctly around the table, and all actions synchronized clearly and fairly.

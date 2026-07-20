@@ -1,0 +1,46 @@
+[gd_scene format=3 uid="uid://0coq583acq5h"]
+
+[ext_resource type="Script" uid="uid://j01rxy7es047" path="res://scripts/game/Card3D.gd" id="1_rfe60"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ds7hi"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_wmp85"]
+size = Vector3(0.53, 0.742, 0.002)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1y3ki"]
+shading_mode = 0
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_iva4o"]
+size = Vector2(0.53, 0.742)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ulgl5"]
+shading_mode = 0
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_omrjl"]
+size = Vector2(0.53, 0.742)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_2w86v"]
+size = Vector3(0.535, 0.743, 0.004)
+
+[node name="Card3D" type="Node3D" unique_id=141779981]
+script = ExtResource("1_rfe60")
+
+[node name="Body" type="MeshInstance3D" parent="." unique_id=1181774580]
+visible = false
+material_override = SubResource("StandardMaterial3D_ds7hi")
+mesh = SubResource("BoxMesh_wmp85")
+
+[node name="Front" type="MeshInstance3D" parent="." unique_id=1366194505]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 0, 0, 0.006)
+material_override = SubResource("StandardMaterial3D_1y3ki")
+mesh = SubResource("PlaneMesh_iva4o")
+
+[node name="Back" type="MeshInstance3D" parent="." unique_id=46825819]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 0, 0, -0.006)
+material_override = SubResource("StandardMaterial3D_ulgl5")
+mesh = SubResource("PlaneMesh_omrjl")
+
+[node name="TapArea" type="Area3D" parent="." unique_id=20399508]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="TapArea" unique_id=1524349567]
+shape = SubResource("BoxShape3D_2w86v")

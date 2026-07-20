@@ -10,14 +10,23 @@ config_version=5
 
 [application]
 
-config/name="MendicotOnline"
-config/features=PackedStringArray("4.6", "Forward Plus")
+config/name="MendiGo"
+run/main_scene="uid://c4e6ix1gnx15r"
+config/features=PackedStringArray("4.8", "GL Compatibility")
+boot_splash/bg_color=Color(0.063, 0.098, 0.078, 1)
 config/icon="res://icon.svg"
+
+[autoload]
+
+NetworkManager="*uid://87h4akgkexqa"
 
 [display]
 
-window/size/mode=3
+window/size/viewport_width=1280
+window/size/viewport_height=720
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=4
 
 [input]
 
@@ -38,4 +47,6 @@ back={
 
 [rendering]
 
-rendering_device/driver.windows="d3d12"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
