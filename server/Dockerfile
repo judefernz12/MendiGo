@@ -9,4 +9,7 @@ RUN chmod +x server.x86_64
 
 EXPOSE 12345/tcp
 
-CMD ["./server.x86_64", "--headless", "res://scenes/game/Server.tscn"]
+# No scene path here: exported binaries can't override the scene from the
+# command line. The dedicated-server build boots into Server.tscn on its own
+# (see run/main_scene.dedicated_server in project.godot and App.gd).
+CMD ["./server.x86_64", "--headless"]
