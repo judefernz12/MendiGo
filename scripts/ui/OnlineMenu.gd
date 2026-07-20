@@ -44,12 +44,12 @@ func _ensure_connection() -> void:
 		return
 
 	if peer == null or peer.get_connection_status() == MultiplayerPeer.CONNECTION_DISCONNECTED:
-		status_label.text = "Connecting to server..."
+		status_label.text = "Connecting... waking the server can take a minute."
 		NetworkManager.connect_to_server(_get_player_name())
 		return
 
 	# Still connecting: wait for the connected/failed signal.
-	status_label.text = "Connecting to server..."
+	status_label.text = "Connecting... waking the server can take a minute."
 
 func _get_player_name() -> String:
 	if NetworkManager.local_player_name != "":

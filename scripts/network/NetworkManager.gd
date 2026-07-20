@@ -14,9 +14,14 @@ signal trump_mode_choice_requested(match_data)
 
 var peer: MultiplayerPeer = null
 
+# Trusted root certificates shipped with the game. Passing these explicitly
+# makes wss:// work reliably on every platform instead of depending on the
+# OS certificate store (which Godot fails to read on some setups).
+const CA_BUNDLE_PATH := "res://assets/certs/ca-certificates.crt"
+
 # Set this to your real server URL before exporting clients.
 # Example (Render): "wss://your-app-name.onrender.com"
-var production_websocket_url: String = "wss://play.your-domain.com/ws"
+var production_websocket_url: String = "wss://mendigo.onrender.com"
 var local_websocket_url: String = "ws://127.0.0.1:12345"
 var use_local_server: bool = false
 var server_host: String = "play.your-domain.com"
@@ -48,14 +53,30 @@ func connect_to_server(player_name: String) -> void:
 		local_player_id = str(Time.get_unix_time_from_system()) + "_" + str(randi())
 
 	var ws_peer := WebSocketMultiplayerPeer.new()
+	# Free-tier hosting (Render) sleeps when idle and takes 30-60 s to wake.
+	# Godot's default handshake timeout is 3 s, which would abort long
+	# before the server is up.
+	ws_peer.handshake_timeout = 90.0
 	var url := local_websocket_url if use_local_server else production_websocket_url
-	var err := ws_peer.create_client(url)
+	var err := ws_peer.create_client(url, _make_tls_options(url))
 	if err != OK:
 		emit_signal("connection_failed")
 		return
 
 	peer = ws_peer
 	multiplayer.multiplayer_peer = peer
+
+func _make_tls_options(url: String) -> TLSOptions:
+	if not url.begins_with("wss://"):
+		return null
+	if OS.has_feature("web"):
+		# Browsers do their own TLS; Godot's options are ignored there.
+		return null
+	var cert := X509Certificate.new()
+	if cert.load(CA_BUNDLE_PATH) != OK:
+		push_warning("CA bundle not found at %s; relying on system certificates." % CA_BUNDLE_PATH)
+		return null
+	return TLSOptions.client(cert)
 
 func disconnect_from_server() -> void:
 	if multiplayer.multiplayer_peer != null:
