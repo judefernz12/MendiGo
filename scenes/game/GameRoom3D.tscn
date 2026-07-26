@@ -1,8 +1,7 @@
-[gd_scene load_steps=9 format=3 uid="uid://b1iimwv0e0i8w"]
+[gd_scene load_steps=7 format=3 uid="uid://b1iimwv0e0i8w"]
 
 [ext_resource type="Script" uid="uid://d0xk6s4dll2pv" path="res://scripts/game/GameRoom3D.gd" id="1_lfoye"]
 [ext_resource type="Texture2D" uid="uid://h4qchnp8d6iw" path="res://assets/ui/circle.png" id="2_w4kte"]
-[ext_resource type="Script" uid="uid://cf6ac6ivwxjog" path="res://scripts/game/NetworkManager.gd" id="3_4b42j"]
 [ext_resource type="Theme" uid="uid://dtmendithm41a" path="res://assets/ui/app_theme.tres" id="4_theme"]
 
 [sub_resource type="Environment" id="Environment_w4kte"]
@@ -14,9 +13,6 @@ albedo_color = Color(0.051, 0.29, 0.161, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_3wju6"]
 size = Vector3(3.005, 0.03, 3)
-
-[sub_resource type="LabelSettings" id="LabelSettings_lfoye"]
-font_size = 25
 
 [node name="GameRoom3d" type="Node3D"]
 script = ExtResource("1_lfoye")
@@ -134,28 +130,9 @@ offset_top = 114.0
 offset_right = -14.0
 offset_bottom = 140.0
 grow_horizontal = 0
+mouse_filter = 2
 text = "Trump: None"
 horizontal_alignment = 2
-
-[node name="TrumpRevealCard" type="TextureRect" parent="CanvasLayer/HUD"]
-visible = false
-layout_mode = 0
-offset_left = 449.0
-offset_top = 61.0
-offset_right = 479.0
-offset_bottom = 92.0
-mouse_filter = 2
-
-[node name="TurnTimerLabel" type="Label" parent="CanvasLayer/HUD"]
-visible = false
-layout_mode = 0
-offset_left = 551.0
-offset_top = 597.0
-offset_right = 591.0
-offset_bottom = 620.0
-text = "15"
-label_settings = SubResource("LabelSettings_lfoye")
-horizontal_alignment = 1
 
 [node name="TurnTimerWidget" type="Control" parent="CanvasLayer/HUD"]
 layout_mode = 1
@@ -204,6 +181,7 @@ offset_right = 9.5
 offset_bottom = 11.5
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 text = "15"
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -238,55 +216,13 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -0.5)
 [node name="Seat0_MyHand" type="Marker3D" parent="SeatAnchors"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1.8)
 
-[node name="Seat1_Right" type="Marker3D" parent="SeatAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.2, 1, 0.3)
-
-[node name="Seat2_Top" type="Marker3D" parent="SeatAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -2.4)
-
-[node name="Seat3_Left" type="Marker3D" parent="SeatAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3.2, 1, 0.3)
-
-[node name="TrickSlots" type="Node3D" parent="."]
-
-[node name="Slot0_Bottom" type="Marker3D" parent="TrickSlots"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0.8)
-
-[node name="Slot1_Right" type="Marker3D" parent="TrickSlots"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.2, 1, 0)
-
-[node name="Slot2_Top" type="Marker3D" parent="TrickSlots"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -0.8)
-
-[node name="Slot3_Left" type="Marker3D" parent="TrickSlots"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.2, 1, 0)
-
 [node name="TeamPiles" type="Node3D" parent="."]
 
 [node name="PileTeamA" type="Marker3D" parent="TeamPiles"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.3922205, 1, -0.7090266)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.3922205, 1, 1.5)
 
 [node name="PileTeamB" type="Marker3D" parent="TeamPiles"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.262, 1, -0.7)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.262, 1, -1.9)
 
 [node name="HiddenTrumpSlot" type="Marker3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.4444227, 1, 1.7820014)
-
-[node name="TurnTimerAnchors" type="Node3D" parent="."]
-
-[node name="MyTimerAnchor" type="Marker3D" parent="TurnTimerAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 2.3594298)
-
-[node name="RightTimerAnchor" type="Marker3D" parent="TurnTimerAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.5747845, 1, 1.0902815)
-
-[node name="TopTimerAnchor" type="Marker3D" parent="TurnTimerAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -0.2889312)
-
-[node name="LeftTimerAnchor" type="Marker3D" parent="TurnTimerAnchors"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.2, 1, 1.1400054)
-
-[node name="NetworkManager" type="Node" parent="."]
-script = ExtResource("3_4b42j")
-
-[connection signal="pressed" from="CanvasLayer/HUD/PlayButton" to="." method="_on_play_button_pressed"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.6, 1, 1.7820014)

@@ -10,9 +10,11 @@ const SUITS := ["clubs", "diamonds", "hearts", "spades"]
 const TARGET_SCORE := 15
 const TURN_DEADLINE_S := 20.0
 const CHOICE_DEADLINE_S := 25.0
-const TRICK_RESOLVE_PAUSE_S := 1.4
-const BOT_PLAY_DELAY_S := 0.9
-const NEXT_GAME_DELAY_S := 7.0
+const TRICK_RESOLVE_PAUSE_S := 1.6
+const BOT_PLAY_DELAY_S := 1.1
+const NEXT_GAME_DELAY_S := 8.0
+const TRUMP_REVEAL_HOLD_S := 3.0
+const BOT_CHOICE_DELAY_S := 2.5
 
 var rooms: Dictionary = {}
 var peer_to_room: Dictionary = {}
@@ -246,12 +248,19 @@ func _create_match_state(room: Dictionary) -> Dictionary:
 		var p: Dictionary = p_raw
 		hands[str(p.get("seat_id", ""))] = []
 
+	# Deal in play direction starting with the player after the dealer (the
+	# trump holder), in batches, exactly as GameRules.txt describes.
+	var deal_order := _deal_seat_order(
+		str(room.get("dealer_seat_id", "seat_0")),
+		player_count,
+		str(settings.get("play_direction", "counter_clockwise"))
+	)
 	var first_batch_size := int(deal_pattern[0])
-	for deal_round in range(first_batch_size):
-		for p_raw in players:
-			var p: Dictionary = p_raw
-			var seat_id := str(p.get("seat_id", ""))
-			hands[seat_id].append(deck.pop_back())
+	for seat_id in deal_order:
+		for _i in range(first_batch_size):
+			if deck.is_empty():
+				break
+			hands[str(seat_id)].append(deck.pop_back())
 
 	return {
 		"room_code": room.get("code", ""),
@@ -282,25 +291,42 @@ func _create_match_state(room: Dictionary) -> Dictionary:
 		"current_leader_seat_id": room.get("trump_holder_seat_id", "seat_1"),
 		"captured_tricks": {"A": 0, "B": 0},
 		"captured_10s": {"A": 0, "B": 0},
+		"captured_ten_cards": {"A": [], "B": []},
 		"scores": {"A": 0, "B": 0},
 		"last_game_result": {},
-		"resolving": false
+		"resolving": false,
+		"revealing_trump": false,
+		"trick_seq": 0,
+		"last_trick": {},
+		"deal_seq": 1
 	}
 
+func _deal_seat_order(dealer_seat_id: String, player_count: int, play_direction: String) -> Array:
+	var order: Array = []
+	var seat_id := dealer_seat_id
+	for _i in range(player_count):
+		seat_id = _next_seat(seat_id, player_count, play_direction)
+		order.append(seat_id)
+	return order
+
 func _deal_remaining_cards(state: Dictionary) -> Dictionary:
-	var players: Array = state.get("players", [])
 	var deck: Array = state.get("deck", [])
-	var deal_pattern := _get_deal_pattern(int(state.get("player_count", 4)))
+	var player_count := int(state.get("player_count", 4))
+	var deal_pattern := _get_deal_pattern(player_count)
+	var deal_order := _deal_seat_order(
+		str(state.get("dealer_seat_id", "seat_0")),
+		player_count,
+		str(state.get("play_direction", "counter_clockwise"))
+	)
 	for batch_index in range(1, deal_pattern.size()):
 		var batch_size := int(deal_pattern[batch_index])
-		for deal_round in range(batch_size):
-			for p_raw in players:
-				var p: Dictionary = p_raw
-				var seat_id := str(p.get("seat_id", ""))
+		for seat_id in deal_order:
+			for _i in range(batch_size):
 				if deck.is_empty():
-					continue
-				state["hands"][seat_id].append(deck.pop_back())
+					break
+				state["hands"][str(seat_id)].append(deck.pop_back())
 	state["deck"] = deck
+	state["deal_seq"] = int(state.get("deal_seq", 0)) + 1
 	state["phase"] = "playing"
 	state["current_turn_seat_id"] = state.get("trump_holder_seat_id", "seat_1")
 	state["current_leader_seat_id"] = state.get("trump_holder_seat_id", "seat_1")
@@ -320,6 +346,19 @@ func _seat_order_for_abs_seat(abs_seat_id: String, player_count: int = ROOM_SIZE
 	for offset in range(player_count):
 		order.append("seat_%d" % ((local_index + offset) % player_count))
 	return order
+
+func _deal_order_views(state: Dictionary, mapping: Dictionary) -> Array:
+	var order := _deal_seat_order(
+		str(state.get("dealer_seat_id", "seat_0")),
+		int(state.get("player_count", ROOM_SIZE)),
+		str(state.get("play_direction", "counter_clockwise"))
+	)
+	var views: Array = []
+	for seat_id in order:
+		var view := str(mapping.get(str(seat_id), ""))
+		if view != "":
+			views.append(view)
+	return views
 
 func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Dictionary:
 	var state: Dictionary = room.get("match_state", {}).duplicate(true)
@@ -383,6 +422,18 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 			"team": _team_for_seat(p_seat_id)
 		}
 
+	# Remap the completed-trick event into this player's view so the client
+	# can animate the cards into the correct captured pile.
+	var last_trick: Dictionary = state.get("last_trick", {}).duplicate(true)
+	if not last_trick.is_empty():
+		var mapped_trick_cards: Array = []
+		for entry_raw in last_trick.get("cards", []):
+			var entry: Dictionary = entry_raw.duplicate(true)
+			entry["seat"] = str(mapping.get(str(entry.get("seat_id", "")), "my"))
+			mapped_trick_cards.append(entry)
+		last_trick["cards"] = mapped_trick_cards
+		last_trick["winner_seat"] = str(mapping.get(str(last_trick.get("winner_seat_id", "")), "my"))
+
 	var client_state := {
 		"phase": state.get("phase", "playing"),
 		"player_count": player_count,
@@ -405,9 +456,15 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 		"hidden_trump_revealed": hidden_trump.get("is_revealed", false),
 		"awaiting_hidden_trump_play": false,
 		"hidden_trump": hidden_trump,
+		"revealing_trump": bool(state.get("revealing_trump", false)),
+		"deal_order": _deal_order_views(state, mapping),
+		"last_trick": last_trick,
+		"trick_seq": int(state.get("trick_seq", 0)),
+		"deal_seq": int(state.get("deal_seq", 0)),
 		"team_a_trick_count": state.get("captured_tricks", {}).get("A", 0),
 		"team_b_trick_count": state.get("captured_tricks", {}).get("B", 0),
 		"captured_10s": state.get("captured_10s", {"A": 0, "B": 0}),
+		"captured_ten_cards": state.get("captured_ten_cards", {"A": [], "B": []}),
 		"scores": state.get("scores", {"A": 0, "B": 0}),
 		"last_game_result": state.get("last_game_result", {}),
 		"hands": hands_by_view,
@@ -557,10 +614,37 @@ func _finish_trick_if_needed(state: Dictionary) -> Dictionary:
 	var winner_seat := _resolve_trick_winner(state)
 	var team := _team_for_seat(winner_seat)
 	state["captured_tricks"][team] = int(state["captured_tricks"].get(team, 0)) + 1
+
+	var tens_in_trick: Array = []
 	for entry_raw in trick:
 		var entry: Dictionary = entry_raw
 		if str(entry.get("rank", "")) == "10":
 			state["captured_10s"][team] = int(state["captured_10s"].get(team, 0)) + 1
+			tens_in_trick.append({"suit": str(entry.get("suit", "")), "rank": "10"})
+
+	var captured_ten_cards: Dictionary = state.get("captured_ten_cards", {"A": [], "B": []})
+	var team_tens: Array = captured_ten_cards.get(team, [])
+	for ten in tens_in_trick:
+		team_tens.append(ten)
+	captured_ten_cards[team] = team_tens
+	state["captured_ten_cards"] = captured_ten_cards
+
+	# Publish the completed trick so clients can animate it into the winning
+	# team's captured pile. The sequence number lets a client tell a new
+	# capture apart from a resend of the same snapshot.
+	var trick_seq := int(state.get("trick_seq", 0)) + 1
+	state["trick_seq"] = trick_seq
+	state["last_trick"] = {
+		"seq": trick_seq,
+		"winner_seat_id": winner_seat,
+		"team": team,
+		"cards": trick.duplicate(true),
+		"tens": tens_in_trick,
+		"pile_index": int(state["captured_tricks"].get(team, 1)) - 1,
+		"lead_suit": str(state.get("lead_suit", "")),
+		"trump_suit": str(state.get("trump_suit", "")),
+		"trump_active": bool(state.get("trump_active", false))
+	}
 
 	state["trick_cards"] = []
 	state["lead_suit"] = ""
@@ -651,7 +735,7 @@ func _maybe_run_bot_turn(code: String) -> void:
 	var state: Dictionary = room.get("match_state", {})
 	if state.get("phase", "") != "playing":
 		return
-	if bool(state.get("resolving", false)):
+	if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 		return
 	var current_seat := str(state.get("current_turn_seat_id", ""))
 	if not _seat_is_bot(room, current_seat):
@@ -672,7 +756,7 @@ func _run_bot_turn_after_delay(code: String) -> void:
 	var state: Dictionary = room.get("match_state", {})
 	if state.get("phase", "") != "playing":
 		return
-	if bool(state.get("resolving", false)):
+	if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 		return
 	var current_seat := str(state.get("current_turn_seat_id", ""))
 	if not _seat_is_bot(room, current_seat):
@@ -754,7 +838,7 @@ func _arm_action_deadline(code: String) -> void:
 	var seat := ""
 	var wait_time := TURN_DEADLINE_S
 	if phase == "playing":
-		if bool(state.get("resolving", false)):
+		if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 			return
 		seat = str(state.get("current_turn_seat_id", ""))
 	elif phase == "trump_mode_choice" or phase == "closed_trump_card_choice":
@@ -796,7 +880,7 @@ func _apply_play_card_action(code: String, seat_id: String, card_id: String) -> 
 	var state: Dictionary = room.get("match_state", {})
 	if state.get("phase", "") != "playing":
 		return
-	if bool(state.get("resolving", false)):
+	if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 		return
 	if str(state.get("current_turn_seat_id", "")) != seat_id:
 		return
@@ -914,11 +998,16 @@ func _maybe_auto_choose_trump_for_bot(code: String) -> void:
 		return
 
 	var trump_holder := str(state.get("trump_holder_seat_id", ""))
-	for p_raw in room.get("players", []):
-		var p: Dictionary = p_raw
-		if str(p.get("seat_id", "")) == trump_holder and bool(p.get("is_bot", false)):
-			_apply_trump_mode_choice(code, trump_holder, "hidden")
-			return
+	if not _seat_is_bot(room, trump_holder):
+		return
+
+	# Let clients finish animating the first batch before the bot decides.
+	await get_tree().create_timer(BOT_CHOICE_DELAY_S).timeout
+	if not rooms.has(code):
+		return
+	if str(rooms[code].get("match_state", {}).get("phase", "")) != "trump_mode_choice":
+		return
+	_apply_trump_mode_choice(code, trump_holder, "hidden")
 
 func _start_server_match_scene(code: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -964,13 +1053,18 @@ func _maybe_auto_choose_hidden_trump_for_bot(code: String) -> void:
 		return
 
 	var holder := str(state.get("trump_holder_seat_id", ""))
-	for p_raw in room.get("players", []):
-		var p: Dictionary = p_raw
-		if str(p.get("seat_id", "")) == holder and bool(p.get("is_bot", false)):
-			var hand: Array = state.get("hands", {}).get(holder, [])
-			if not hand.is_empty():
-				_apply_hidden_trump_choice(code, holder, str((hand[0] as Dictionary).get("card_id", "")))
-			return
+	if not _seat_is_bot(room, holder):
+		return
+
+	await get_tree().create_timer(BOT_CHOICE_DELAY_S).timeout
+	if not rooms.has(code):
+		return
+	var current: Dictionary = rooms[code].get("match_state", {})
+	if str(current.get("phase", "")) != "closed_trump_card_choice":
+		return
+	var hand: Array = current.get("hands", {}).get(holder, [])
+	if not hand.is_empty():
+		_apply_hidden_trump_choice(code, holder, str((hand[0] as Dictionary).get("card_id", "")))
 
 func _apply_hidden_trump_choice(code: String, seat_id: String, card_id: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -1024,18 +1118,49 @@ func _apply_hidden_trump_reveal(code: String, seat_id: String) -> void:
 	if holder == "":
 		return
 
+	# Phase 1: flip the hidden trump face up in its slot for everyone.
+	# Play stays blocked while revealing_trump is true.
 	state["trump_active"] = true
 	state["trump_suit"] = str(hidden_trump.get("suit", ""))
 	hidden_trump["is_revealed"] = true
+	hidden_trump["is_set_aside"] = true
+	hidden_trump["has_returned_to_hand"] = false
+	state["hidden_trump"] = hidden_trump
+	state["revealing_trump"] = true
+
+	room["match_state"] = state
+	rooms[code] = room
+	_broadcast_match_state(code)
+	_return_hidden_trump_after_reveal(code, holder)
+
+func _return_hidden_trump_after_reveal(code: String, holder: String) -> void:
+	await get_tree().create_timer(TRUMP_REVEAL_HOLD_S).timeout
+	if not rooms.has(code):
+		return
+	var room: Dictionary = rooms[code]
+	var state: Dictionary = room.get("match_state", {})
+	if not bool(state.get("revealing_trump", false)):
+		return
+
+	# Phase 2: the revealed card goes back to the trump holder's hand.
+	var hidden_trump: Dictionary = state.get("hidden_trump", {})
 	hidden_trump["is_set_aside"] = false
 	hidden_trump["has_returned_to_hand"] = true
 	state["hidden_trump"] = hidden_trump
-	state["hands"][holder].append({
-		"card_id": hidden_trump.get("card_id", ""),
-		"id": hidden_trump.get("id", 0),
-		"suit": hidden_trump.get("suit", ""),
-		"rank": hidden_trump.get("rank", "")
-	})
+	state["revealing_trump"] = false
+
+	var hands: Dictionary = state.get("hands", {})
+	if hands.has(holder):
+		var holder_hand: Array = hands[holder]
+		if _find_card_index(holder_hand, str(hidden_trump.get("card_id", ""))) == -1:
+			holder_hand.append({
+				"card_id": hidden_trump.get("card_id", ""),
+				"id": hidden_trump.get("id", 0),
+				"suit": hidden_trump.get("suit", ""),
+				"rank": hidden_trump.get("rank", "")
+			})
+			hands[holder] = holder_hand
+			state["hands"] = hands
 
 	room["match_state"] = state
 	rooms[code] = room
