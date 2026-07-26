@@ -66,23 +66,11 @@ func project(world: Vector3) -> Vector2:
 	return Vector2(VIEW.x * 0.5 * (1.0 + local.x / half_w), VIEW.y * 0.5 * (1.0 - local.y / half_h))
 
 func card_rect(card: Node3D) -> Rect2:
-	# Project the four corners of the card's footprint and take their bounds.
-	var half_w: float = room_ui.CARD_W * 0.5
-	var half_h: float = room_ui.CARD_H * 0.5
-	var corners := [
-		Vector3(-half_w, 0, -half_h), Vector3(half_w, 0, -half_h),
-		Vector3(-half_w, 0, half_h), Vector3(half_w, 0, half_h)
-	]
-	var rect := Rect2()
-	var first := true
-	for corner in corners:
-		var point := project(room_ui.cards_node.to_global(card.position + corner))
-		if first:
-			rect = Rect2(point, Vector2.ZERO)
-			first = false
-		else:
-			rect = rect.expand(point)
-	return rect
+	# Use the scene's own routine: it transforms the card's face by the card's
+	# rotation, so it is right for flat cards and for the opponents' standing
+	# ones alike. A flat-footprint approximation here would measure a table
+	# that is not the one being drawn.
+	return room_ui._card_screen_rect(card, func(w: Vector3) -> Vector2: return project(w))
 
 func rects_of(cards: Array) -> Array:
 	var out: Array = []
@@ -101,10 +89,11 @@ func control_rect(control: Control) -> Rect2:
 	return Rect2(Vector2(left, top), Vector2(right - left, bottom - top))
 
 func plate_rect(view_name: String) -> Rect2:
-	var anchor: Vector3 = room_ui._nameplate_anchor(view_name)
-	var centre := project(room_ui.cards_node.to_global(anchor))
+	# The scene places nameplates through the live (square) viewport, so ask
+	# the same placement routine using this test's projection instead.
 	var size: Vector2 = room_ui.NAMEPLATE_SIZE
-	return Rect2(centre - size * 0.5, size)
+	var placer := func(world: Vector3) -> Vector2: return project(world)
+	return Rect2(room_ui._nameplate_position(view_name, placer, size, VIEW), size)
 
 func overlap(a: Rect2, b: Rect2) -> Vector2:
 	var inter := a.intersection(b)
@@ -271,7 +260,9 @@ func _run() -> void:
 		buttons.append(control_rect(control))
 
 	var score_panel := [control_rect(room_ui.score_panel)]
+	var trump_chip := [control_rect(room_ui.trump_panel)]
 	var banner := [control_rect(room_ui.phase_message_panel)]
+	var panels: Array = score_panel + trump_chip + banner
 
 	# --- the rules -----------------------------------------------------------
 	none_clash(my_cards, piles, "the local hand does not sit on a captured pile")
@@ -280,20 +271,22 @@ func _run() -> void:
 	none_clash(my_cards, trick_cards, "the local hand does not sit on the trick")
 	none_clash(my_cards, buttons, "the local hand does not sit under the action buttons")
 	none_clash(my_cards, plates, "the local hand does not sit under a nameplate")
-	none_clash(my_cards, score_panel, "the local hand does not sit under the scoreboard")
-	none_clash(my_cards, banner, "the local hand does not sit under the message banner")
+	none_clash(my_cards, panels, "the local hand does not sit under a HUD panel")
+	none_clash(trump_slot, trump_chip, "the trump chip does not cover the hidden trump slot")
+	none_clash(tens, panels, "the captured 10s do not sit under a HUD panel")
+	none_clash(piles, panels, "the captured piles do not sit under a HUD panel")
+	none_clash(trump_chip, buttons, "the trump chip does not overlap the action buttons")
+	no_self_clash(panels, "the HUD panels do not overlap each other")
 
 	none_clash(plates, opponent_cards, "nameplates do not sit on the opponents' cards")
 	none_clash(plates, trick_cards, "nameplates do not sit on the trick")
 	none_clash(plates, piles, "nameplates do not sit on a captured pile")
 	none_clash(plates, tens, "nameplates do not sit on the captured 10s")
-	none_clash(plates, score_panel, "nameplates do not sit under the scoreboard")
-	none_clash(plates, banner, "nameplates do not sit under the message banner")
+	none_clash(plates, panels, "nameplates do not sit under a HUD panel")
 	none_clash(plates, buttons, "nameplates do not sit under the action buttons")
 	no_self_clash(plates, "two nameplates do not sit on each other")
 
-	none_clash(opponent_cards, banner, "the message banner does not cover the opponents' cards")
-	none_clash(opponent_cards, score_panel, "the scoreboard does not cover the opponents' cards")
+	none_clash(opponent_cards, panels, "no HUD panel covers the opponents' cards")
 	none_clash(opponent_cards, trick_cards, "the opponents' cards do not sit on the trick")
 	none_clash(opponent_cards, piles, "the opponents' cards do not sit on a captured pile")
 
@@ -301,7 +294,6 @@ func _run() -> void:
 	none_clash(trick_cards, banner, "the message banner does not cover the trick")
 	none_clash(piles, tens, "a captured pile does not cover its own 10s")
 	none_clash(piles, trump_slot, "the hidden trump slot is clear of the piles")
-	none_clash(score_panel, banner, "the scoreboard and the message banner do not overlap")
 
 	# The captured pile steps forward as it grows, so a single bundle proves
 	# nothing. Check where a full 13-trick stack would actually end up.
@@ -332,6 +324,28 @@ func _run() -> void:
 				off_screen += 1
 				worst_note = "%s at %.0f,%.0f %.0fx%.0f" % [str(key), r.position.x, r.position.y, r.size.x, r.size.y]
 	ok(off_screen == 0, "every card stays inside the %.0fx%.0f screen (%d off, e.g. %s)" % [view_size.x, view_size.y, off_screen, worst_note])
+
+	# --- the table has to fill the screen and sit in the middle of it ---------
+	var content := Rect2()
+	var have_content := false
+	for group in [my_cards, opponent_cards, trick_cards, piles, tens, trump_slot]:
+		for r in group:
+			if have_content:
+				content = content.merge(r)
+			else:
+				content = r
+				have_content = true
+	var top_gap := content.position.y
+	var bottom_gap := view_size.y - content.end.y
+	ok(absf(top_gap - bottom_gap) < 60.0, "the table is vertically centred (%.0f px above, %.0f px below)" % [top_gap, bottom_gap])
+	ok(content.size.y > view_size.y * 0.70, "the table fills the screen vertically (%.0f of %.0f px)" % [content.size.y, view_size.y])
+	ok(content.size.x > view_size.x * 0.70, "the table fills the screen horizontally (%.0f of %.0f px)" % [content.size.x, view_size.x])
+
+	# Pull the camera back and the cards stop being readable; hold the line.
+	var tallest := 0.0
+	for r in my_cards:
+		tallest = maxf(tallest, r.size.y)
+	ok(tallest >= 100.0, "cards in hand are big enough to read (%.0f px tall)" % tallest)
 
 	var plates_off := 0
 	var plate_note := ""

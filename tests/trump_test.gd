@@ -171,6 +171,13 @@ func _run() -> void:
 		ok(str(ui.hidden_trump_node.suit) == "spades", "the revealed trump shows its real suit")
 	ok(ui.trump_active and str(ui.trump_suit) == "spades", "the client picks up the active trump")
 
+	# The trump chip has to actually show something once the suit is known.
+	ok(ui.trump_panel != null and ui.trump_panel.visible, "the trump chip is on screen")
+	ok(str(ui.trump_label.text) == "Spades", "the trump chip names the suit (got '%s')" % str(ui.trump_label.text))
+	ok(ui.trump_suit_icon.visible, "the trump chip shows its suit icon")
+	ok(ui.trump_suit_icon.texture != null, "the trump suit icon has a texture loaded")
+	ok(ui.trump_suit_icon.get_parent() == null or ui.trump_suit_icon.get_parent().get_parent() == ui.trump_panel, "the icon lives inside the trump chip")
+
 	# --- 4: the reveal ends and the card goes back to its owner's hand ---
 	var stage_four := base_snapshot()
 	stage_four["hands"]["my"] = plain_cards() + [trump_card()]

@@ -77,10 +77,16 @@ otherwise untestable, so the rules are written down here. It deals a real game,
 projects every card and HUD element onto a 1280x720 screen through the real
 camera, and asserts that nothing which must stay apart overlaps by more than a
 few pixels: the local hand against the piles, captured 10s, hidden trump slot,
-trick and action buttons; nameplates against cards, panels and each other; and
-everything inside the screen. It also checks where a full 13-trick pile lands,
-because the pile steps forward as it grows and a single captured trick proves
-nothing.
+trick, action buttons and HUD panels; nameplates against cards, panels and each
+other; and everything inside the screen. It also checks where a full 13-trick
+pile lands, because the pile steps forward as it grows and a single captured
+trick proves nothing.
+
+Three whole-table properties are asserted too, because "it looks wrong" usually
+means one of these: the table is vertically centred (no big blank band at one
+end), it fills at least 70% of the screen in both axes, and a card in hand is
+at least 100 px tall. That last one is a floor on how far the camera may be
+pulled back - at y 6.7 a card drops to about 95 px and stops being readable.
 
 Headless always comes up with a square window and refuses to resize, so this
 test recomputes both the camera projection and the anchored HUD rects for the

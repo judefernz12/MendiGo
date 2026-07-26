@@ -81,30 +81,42 @@ a delta cannot be reconciled.
 
 ## HUD and table layout
 
-The top-left panel carries everything about the match in one place: the trump
-suit with its icon at the top, then a labelled grid with a row per team giving
-score, 10s (shown as `n / 4` against the court target, highlighting as a team
-closes in) and tricks, then the dealer and whose turn it is. There is no
-separate result chip - the message banner at the top of the screen carries the
-result, coloured by who won.
+Three HUD anchors, one job each. Top left: the match panel - a labelled grid
+with a row per team giving score, 10s (shown as `n / 4` against the court
+target, highlighting as a team closes in) and tricks, then the dealer and whose
+turn it is. Bottom right: the trump chip - a 40 px suit icon and the suit name,
+next to the hand and the action buttons where the player is already looking
+(it reads "Not set" in grey until the trump is decided). Top centre: the
+message banner, which also carries the game result coloured by who won, so
+there is no separate result chip.
 
 Table geometry is checked, not eyeballed. `tests/layout_test.gd` projects every
 card and HUD element onto a 1280x720 screen through the real camera and asserts
 that things which must not sit on top of each other do not: the local hand
-against the piles, the captured 10s, the hidden trump slot, the trick and the
-action buttons; nameplates against cards, panels and each other; and everything
-against the screen edges. It also checks where a full 13-trick pile ends up,
-since the pile steps forward as it grows.
+against the piles, the captured 10s, the hidden trump slot, the trick, the
+action buttons and the panels; nameplates against cards, panels and each other;
+and everything against the screen edges. It also checks where a full 13-trick
+pile ends up, since the pile steps forward as it grows, and three whole-table
+properties: that the table is vertically centred, that it fills at least 70% of
+the screen in both axes, and that a card in hand is at least 100 px tall.
 
 Notable consequences of that check:
 
-- names sit a fixed distance in front of their seat rather than being lerped
-  towards the table centre, which used to land them on the cards
+- nameplates are placed in screen space, just clear of the projected bounds of
+  the cards they belong to, flipping above them if there is no room below.
+  They used to be lerped towards the table centre and landed on the cards
 - the pile's forward step is 0.022 per trick; the old 0.13 walked a full pile
   most of a card-length across the table and off the bottom of the screen
 - captured 10s are laid out in a column on the far side of their pile
-- the local fan is narrower and shallower so it clears the piles and buttons
-- the camera sits higher (y 6.7) to give the table more room
+- the seat ring is a wide, flat ellipse (RX 2.8, RZ 1.60) centred on the
+  camera axis, so the piles and the trump slot get the screen margins and the
+  table sits in the middle of the screen
+- the camera stays at y 6.069. Raising it to 6.7 shrank a hand card from 111 px
+  to about 95 px tall, which is why the size floor is now asserted
+- opponent cards stand upright, so stacking them with only a vertical offset
+  left their faces coplanar and they z-fought (a visible flicker). Each card is
+  now pushed slightly outwards along the seat's radius, the direction its face
+  points, and they are spaced 0.22 apart rather than 0.18
 
 ## Still needs manual testing in the editor
 

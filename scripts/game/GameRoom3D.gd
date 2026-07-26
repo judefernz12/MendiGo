@@ -17,22 +17,27 @@ const ALL_VIEWS := ["my", "right", "top", "left", "seat4", "seat5", "seat6", "se
 # Table geometry, expressed in the local space of the Cards node so every card,
 # slot and pile shares one coordinate system. The 4-player values reproduce the
 # original hand-placed markers.
-const SEAT_RING_CENTER := Vector3(0, 1, -0.30)
-const SEAT_RING_RX := 3.6
-const SEAT_RING_RZ := 1.75
-const TRICK_RING_CENTER := Vector3(0, 1, 0.05)
-const TRICK_RING_RX := 1.15
-const TRICK_RING_RZ := 0.50
+# The ring is centred on the camera's axis (world z 1.2645, which is local
+# z -0.025) so the table sits in the middle of the screen instead of drifting
+# to one edge. RZ is the tight one: the local hand and the action buttons both
+# have to fit below it.
+const SEAT_RING_CENTER := Vector3(0, 1, -0.10)
+const SEAT_RING_RX := 2.8
+const SEAT_RING_RZ := 1.60
+const TRICK_RING_CENTER := Vector3(0, 1, -0.10)
+const TRICK_RING_RX := 1.10
+const TRICK_RING_RZ := 0.60
 const CARD_FLAT_ROT := Vector3(90, 0, 0)
 
-# A flat card's footprint on the table, from the mesh in Card3D.tscn.
+# A card's face, from the mesh in Card3D.tscn: width along its local X, height
+# along its local Y, no meaningful thickness.
 const CARD_W := 0.53
 const CARD_H := 0.742
 
-# Names are drawn this far in front of their seat (towards the bottom of the
-# screen), which keeps them off the cards instead of on top of them.
-const NAMEPLATE_DROP := 0.95
+# Names are drawn just clear of the cards they belong to, in screen space, so
+# they follow whatever the seat actually looks like.
 const NAMEPLATE_SIZE := Vector2(140, 22)
+const NAMEPLATE_GAP := 8.0
 
 # Animation timing.
 const DEAL_TIME := 0.22
@@ -71,7 +76,12 @@ const COURT_CELEBRATION_TIME := 3.4
 # small tight bunch instead of a wide fan. The real hand size still lives on
 # the server; this only limits how many card backs are drawn.
 const MAX_OPPONENT_CARDS := 4
-const OPPONENT_CARD_SPACING := 0.18
+const OPPONENT_CARD_SPACING := 0.22
+# Opponent cards stand upright facing the table, so stacking them with only a
+# vertical offset left the faces coplanar and they z-fought - the flickering
+# "glitch". Each card is pushed slightly outwards along the seat's radius
+# instead, which is the direction its face points.
+const OPPONENT_CARD_DEPTH := 0.012
 
 @onready var cards_node: Node3D = $Cards
 @onready var deck_point: Marker3D = $DeckPoint
@@ -147,6 +157,7 @@ var trump_icon_tween: Tween = null
 var nameplates: Dictionary = {}
 var hud_values: Dictionary = {}      # scoreboard cell name -> Label
 var score_panel: PanelContainer = null
+var trump_panel: PanelContainer = null
 var leave_button: Button = null
 
 var court_celebrated: bool = false
@@ -186,7 +197,7 @@ func _ready() -> void:
 	trump_suit_icon.visible = false
 	turn_timer_widget.visible = false
 	turn_timer_widget.modulate.a = 0.0
-	trump_label.text = "Trump: None"
+	_refresh_trump_label()
 
 	if phase == "dealer_draw" or phase == "trump_mode_choice":
 		_build_dealer_draw_cards()
@@ -275,8 +286,49 @@ func _seat_anchor_position(view_name: String) -> Vector3:
 	var theta := _seat_angle(view_name)
 	return SEAT_RING_CENTER + Vector3(cos(theta) * SEAT_RING_RX, 0.0, sin(theta) * SEAT_RING_RZ)
 
-func _nameplate_anchor(view_name: String) -> Vector3:
-	return _seat_anchor_position(view_name) + Vector3(0.0, 0.0, NAMEPLATE_DROP)
+func _card_screen_rect(card: Node3D, project: Callable) -> Rect2:
+	# The card's face lives in its own XY plane, so transforming the four
+	# corners handles flat cards and standing opponent cards alike.
+	var half_w := CARD_W * 0.5
+	var half_h := CARD_H * 0.5
+	var rect := Rect2()
+	var first := true
+	for corner in [Vector3(-half_w, -half_h, 0), Vector3(half_w, -half_h, 0), Vector3(-half_w, half_h, 0), Vector3(half_w, half_h, 0)]:
+		var point: Vector2 = project.call(_to_world(card.transform * corner))
+		if first:
+			rect = Rect2(point, Vector2.ZERO)
+			first = false
+		else:
+			rect = rect.expand(point)
+	return rect
+
+func _seat_screen_rect(view_name: String, project: Callable) -> Rect2:
+	var rect := Rect2()
+	var first := true
+	for card in _hand(view_name):
+		if not is_instance_valid(card):
+			continue
+		var card_rect := _card_screen_rect(card, project)
+		if first:
+			rect = card_rect
+			first = false
+		else:
+			rect = rect.merge(card_rect)
+	if first:
+		var fallback: Vector2 = project.call(_to_world(_seat_anchor_position(view_name)))
+		rect = Rect2(fallback, Vector2.ZERO)
+	return rect
+
+func _nameplate_position(view_name: String, project: Callable, plate_size: Vector2, screen: Vector2) -> Vector2:
+	# Sit the name just under the cards it belongs to. If that would run off
+	# the bottom, put it above them instead.
+	var seat := _seat_screen_rect(view_name, project)
+	var pos := Vector2(seat.get_center().x - plate_size.x * 0.5, seat.end.y + NAMEPLATE_GAP)
+	if pos.y + plate_size.y > screen.y - 8.0:
+		pos.y = seat.position.y - NAMEPLATE_GAP - plate_size.y
+	pos.x = clampf(pos.x, 6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
+	pos.y = clampf(pos.y, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
+	return pos
 
 func _trick_slot_position(view_name: String) -> Vector3:
 	var theta := _seat_angle(view_name)
@@ -291,11 +343,11 @@ func _my_hand_transform(index: int, count: int) -> Dictionary:
 	var center := (count - 1) / 2.0
 	var spacing := 0.5
 	if count > 1:
-		spacing = min(0.62, 3.4 / float(count - 1))
+		spacing = min(0.72, 3.7 / float(count - 1))
 	var offset := (index - center) * spacing
 	return {
-		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, abs(index - center) * 0.045),
-		"rotation": Vector3(90, 0, (index - center) * 4.5)
+		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, abs(index - center) * 0.05),
+		"rotation": Vector3(90, 0, (index - center) * 5.0)
 	}
 
 func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dictionary:
@@ -307,8 +359,12 @@ func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dict
 	var seat_pos := _seat_anchor_position(view_name)
 	var center := (slots - 1) / 2.0
 	var tangent := Vector3(-sin(theta), 0.0, cos(theta))
+	var outward := Vector3(cos(theta), 0.0, sin(theta))
 	return {
-		"position": seat_pos + tangent * ((float(slot) - center) * OPPONENT_CARD_SPACING) + Vector3(0, index * 0.002, 0),
+		"position": seat_pos
+			+ tangent * ((float(slot) - center) * OPPONENT_CARD_SPACING)
+			+ outward * (float(index) * OPPONENT_CARD_DEPTH)
+			+ Vector3(0, index * 0.002, 0),
 		"rotation": Vector3(0.0, 90.0 - rad_to_deg(theta), (center - float(slot)) * 4.0)
 	}
 
@@ -1277,36 +1333,6 @@ func _build_status_ui() -> void:
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	score_panel.add_child(column)
 
-	# Trump sits at the top of the match panel rather than alone in a screen
-	# corner: everything you need to read is then in one place.
-	var trump_row := HBoxContainer.new()
-	trump_row.add_theme_constant_override("separation", 8)
-	trump_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(trump_row)
-
-	var trump_caption := _hud_label("TRUMP", 12, COL_MUTED)
-	trump_caption.custom_minimum_size = Vector2(56, 0)
-	trump_row.add_child(trump_caption)
-
-	# The icon and label live in the scene; move them into the row so their
-	# layout is container-driven instead of anchored to the corner.
-	trump_suit_icon.get_parent().remove_child(trump_suit_icon)
-	trump_suit_icon.custom_minimum_size = Vector2(22, 22)
-	trump_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	trump_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	trump_row.add_child(trump_suit_icon)
-
-	trump_label.get_parent().remove_child(trump_label)
-	trump_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	trump_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	trump_label.add_theme_font_size_override("font_size", 16)
-	trump_label.add_theme_color_override("font_color", COL_GOLD)
-	trump_row.add_child(trump_label)
-
-	var trump_rule := HSeparator.new()
-	trump_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(trump_rule)
-
 	var target_label := _hud_label("RACE TO 15", 12, COL_MUTED)
 	hud_values["target"] = target_label
 	column.add_child(target_label)
@@ -1364,6 +1390,59 @@ func _build_status_ui() -> void:
 	hud_values["turn"] = turn_value
 	footer.add_child(turn_value)
 
+	# Trump gets its own chip in the bottom-right corner: big enough to read at
+	# a glance, next to the hand and the action buttons where the player is
+	# already looking, and out of the far corner it used to hide in.
+	trump_panel = PanelContainer.new()
+	trump_panel.name = "TrumpChip"
+	var trump_style := StyleBoxFlat.new()
+	trump_style.bg_color = Color(0.04, 0.09, 0.06, 0.88)
+	trump_style.border_color = Color(0.18, 0.29, 0.23, 0.9)
+	trump_style.set_border_width_all(1)
+	trump_style.set_corner_radius_all(14)
+	trump_style.content_margin_left = 14
+	trump_style.content_margin_right = 16
+	trump_style.content_margin_top = 8
+	trump_style.content_margin_bottom = 8
+	trump_panel.add_theme_stylebox_override("panel", trump_style)
+	trump_panel.anchor_left = 1.0
+	trump_panel.anchor_top = 1.0
+	trump_panel.anchor_right = 1.0
+	trump_panel.anchor_bottom = 1.0
+	trump_panel.offset_left = -212.0
+	trump_panel.offset_top = -86.0
+	trump_panel.offset_right = -14.0
+	trump_panel.offset_bottom = -22.0
+	trump_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(trump_panel)
+
+	var trump_row := HBoxContainer.new()
+	trump_row.add_theme_constant_override("separation", 10)
+	trump_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	trump_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	trump_panel.add_child(trump_row)
+
+	# The icon and label live in the scene; move them into the chip so their
+	# layout is container-driven instead of anchored to the screen corner.
+	trump_suit_icon.get_parent().remove_child(trump_suit_icon)
+	trump_suit_icon.custom_minimum_size = Vector2(40, 40)
+	trump_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	trump_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	trump_row.add_child(trump_suit_icon)
+
+	var trump_text := VBoxContainer.new()
+	trump_text.add_theme_constant_override("separation", 0)
+	trump_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	trump_row.add_child(trump_text)
+	trump_text.add_child(_hud_label("TRUMP", 12, COL_MUTED))
+
+	trump_label.get_parent().remove_child(trump_label)
+	trump_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	trump_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	trump_label.add_theme_font_size_override("font_size", 20)
+	trump_label.add_theme_color_override("font_color", COL_GOLD)
+	trump_text.add_child(trump_label)
+
 	leave_button = Button.new()
 	leave_button.text = "Leave"
 	leave_button.anchor_left = 1.0
@@ -1412,6 +1491,8 @@ func _update_nameplates() -> void:
 	if camera == null:
 		return
 	var turn_view := _current_turn_view()
+	var project := func(world: Vector3) -> Vector2: return camera.unproject_position(world)
+	var screen := get_viewport().get_visible_rect().size
 	for view_name in nameplates.keys():
 		var plate: Label = nameplates[view_name]
 		var p: Dictionary = seat_to_player.get(view_name, {})
@@ -1422,7 +1503,7 @@ func _update_nameplates() -> void:
 			text += "  [offline]"
 		plate.text = text
 
-		plate.position = camera.unproject_position(_to_world(_nameplate_anchor(view_name))) - plate.size * 0.5
+		plate.position = _nameplate_position(view_name, project, plate.size, screen)
 		plate.add_theme_color_override("font_color", Color(1.0, 0.84, 0.4) if view_name == turn_view else Color(0.92, 0.96, 0.93))
 
 func _refresh_hud() -> void:
@@ -1499,7 +1580,12 @@ func _refresh_scoreboard() -> void:
 	_set_hud_value("turn", _display_name(turn_view), COL_GOLD if turn_view == "my" else COL_TEXT)
 
 func _refresh_trump_label() -> void:
-	trump_label.text = "Trump: " + (trump_suit.capitalize() if (trump_active and trump_suit != "") else "None")
+	if trump_active and trump_suit != "":
+		trump_label.text = trump_suit.capitalize()
+		trump_label.add_theme_color_override("font_color", COL_GOLD)
+	else:
+		trump_label.text = "Not set"
+		trump_label.add_theme_color_override("font_color", COL_MUTED)
 
 func _refresh_trump_icon() -> void:
 	if not trump_active or trump_suit == "":
