@@ -42,6 +42,12 @@ const TEN_SPACING := 0.2
 
 const TURN_TIME_LIMIT := 20.0
 
+# Opponent cards are face down and carry no information, so the table shows a
+# small tight bunch instead of a wide fan. The real hand size still lives on
+# the server; this only limits how many card backs are drawn.
+const MAX_OPPONENT_CARDS := 4
+const OPPONENT_CARD_SPACING := 0.18
+
 @onready var cards_node: Node3D = $Cards
 @onready var deck_point: Marker3D = $DeckPoint
 @onready var hidden_trump_slot: Marker3D = $HiddenTrumpSlot
@@ -77,7 +83,8 @@ var abs_to_local_view: Dictionary = {}
 var seat_to_player: Dictionary = {}
 var my_team: String = "A"
 
-var hand_cards: Dictionary = {}      # view name -> Array[Node3D]
+var hand_cards: Dictionary = {}      # view name -> Array[Node3D] (drawn cards)
+var seat_card_counts: Dictionary = {}  # view name -> real hand size on the server
 var trick_entries: Array = []        # [{ "seat": String, "card_id": String, "node": Node3D }]
 var hidden_trump_node: Node3D = null
 var pile_bundles: Dictionary = {"A": [], "B": []}
@@ -260,18 +267,23 @@ func _my_hand_transform(index: int, count: int) -> Dictionary:
 	}
 
 func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dictionary:
+	# Cards past the cap land on the last slot, so trimming the extras after a
+	# deal is invisible (every card back looks the same).
+	var slots := mini(count, MAX_OPPONENT_CARDS)
+	var slot := mini(index, slots - 1)
 	var theta := _seat_angle(view_name)
 	var seat_pos := _seat_anchor_position(view_name)
-	var center := (count - 1) / 2.0
-	var max_span := 2.4 if current_player_count == 4 else 1.7
-	var spacing := 0.6 if current_player_count == 4 else 0.45
-	if count > 1:
-		spacing = minf(spacing, max_span / float(count - 1))
+	var center := (slots - 1) / 2.0
 	var tangent := Vector3(-sin(theta), 0.0, cos(theta))
 	return {
-		"position": seat_pos + tangent * ((float(index) - center) * spacing) + Vector3(0, index * 0.001, 0),
-		"rotation": Vector3(0.0, 90.0 - rad_to_deg(theta), (center - float(index)) * 4.0)
+		"position": seat_pos + tangent * ((float(slot) - center) * OPPONENT_CARD_SPACING) + Vector3(0, index * 0.002, 0),
+		"rotation": Vector3(0.0, 90.0 - rad_to_deg(theta), (center - float(slot)) * 4.0)
 	}
+
+func _visual_count(view_name: String, real_count: int) -> int:
+	if view_name == "my":
+		return real_count
+	return mini(real_count, MAX_OPPONENT_CARDS)
 
 func _hand_transform(view_name: String, index: int, count: int) -> Dictionary:
 	if view_name == "my":
@@ -313,7 +325,10 @@ func _tween_card(card: Node3D, target_pos: Vector3, target_rot: Vector3, duratio
 	tween.set_ease(Tween.EASE_OUT)
 	if delay > 0.0:
 		tween.tween_interval(delay)
-	tween.parallel().tween_property(card, "position", target_pos, duration)
+	# The move must be chained AFTER the interval; only the rotation runs in
+	# parallel with it. Marking the move itself parallel would run it
+	# alongside the interval and cancel the stagger.
+	tween.tween_property(card, "position", target_pos, duration)
 	tween.parallel().tween_property(card, "rotation_degrees", target_rot, duration)
 	return tween
 
@@ -340,6 +355,7 @@ func _clear_cards() -> void:
 	for child in cards_node.get_children():
 		child.queue_free()
 	hand_cards.clear()
+	seat_card_counts.clear()
 	_ensure_hand_arrays()
 	trick_entries.clear()
 	hidden_trump_node = null
@@ -383,6 +399,8 @@ func _apply_snapshot(target: Dictionary) -> void:
 		if _is_fresh_deal(target):
 			_clear_cards()
 			await _animate_deal(target)
+			_sync_opponent_stacks(target)
+			_update_seat_counts(target)
 		else:
 			_snap_rebuild(target)
 		return
@@ -392,6 +410,8 @@ func _apply_snapshot(target: Dictionary) -> void:
 		await _animate_clear_table()
 		_clear_cards()
 		await _animate_deal(target)
+		_sync_opponent_stacks(target)
+		_update_seat_counts(target)
 		return
 
 	await _animate_trick_capture(previous, target)
@@ -400,6 +420,9 @@ func _apply_snapshot(target: Dictionary) -> void:
 	await _animate_deal(target)
 	await _animate_trump_reveal(previous, target)
 	await _animate_hidden_trump_return(previous, target)
+
+	_sync_opponent_stacks(target)
+	_update_seat_counts(target)
 
 	if not _hands_match(target):
 		_snap_rebuild(target)
@@ -470,9 +493,42 @@ func _is_fresh_deal(target: Dictionary) -> bool:
 func _hands_match(target: Dictionary) -> bool:
 	var hands: Dictionary = target.get("hands", {})
 	for view_name in seat_order:
-		if (hands.get(view_name, []) as Array).size() != _hand(view_name).size():
+		var real: int = (hands.get(view_name, []) as Array).size()
+		if _visual_count(view_name, real) != _hand(view_name).size():
 			return false
 	return (target.get("trick_cards", []) as Array).size() == trick_entries.size()
+
+func _update_seat_counts(target: Dictionary) -> void:
+	var hands: Dictionary = target.get("hands", {})
+	for view_name in seat_order:
+		seat_card_counts[view_name] = (hands.get(view_name, []) as Array).size()
+
+func _sync_opponent_stacks(target: Dictionary) -> void:
+	# Opponent stacks are capped, so after a deal (extra cards) or a play
+	# (one card short) the stack is quietly brought back to size. Every card
+	# back is identical, so this is invisible.
+	var hands: Dictionary = target.get("hands", {})
+	for view_name in seat_order:
+		if view_name == "my":
+			continue
+		var real: int = (hands.get(view_name, []) as Array).size()
+		var want := _visual_count(view_name, real)
+		var cards: Array = _hand(view_name)
+		if cards.size() == want:
+			continue
+
+		while cards.size() > want:
+			var extra: Node3D = cards.pop_back()
+			if is_instance_valid(extra):
+				extra.queue_free()
+		while cards.size() < want:
+			var t := _hand_transform(view_name, cards.size(), want)
+			var card := _new_card({}, false, t["position"])
+			card.rotation_degrees = t["rotation"]
+			cards.append(card)
+
+		hand_cards[view_name] = cards
+		_layout_hand(view_name, false)
 
 # =========================================================================
 # animations
@@ -486,9 +542,7 @@ func _animate_deal(target: Dictionary) -> void:
 
 	var deck_pos := deck_point.position
 	var new_my_cards: Array = []
-	var dealt_any := false
-	var delay := 0.0
-	var last_tween: Tween = null
+	var dealt_nodes: Array = []
 
 	for view_raw in deal_order:
 		var view_name := str(view_raw)
@@ -496,8 +550,6 @@ func _animate_deal(target: Dictionary) -> void:
 			continue
 		var target_hand: Array = hands.get(view_name, [])
 		var cards: Array = _hand(view_name)
-		if target_hand.size() <= cards.size():
-			continue
 
 		if view_name == "my":
 			# Keep the player's current order (sorting must survive) and
@@ -515,34 +567,42 @@ func _animate_deal(target: Dictionary) -> void:
 				card.card_clicked.connect(_on_card_clicked)
 				cards.append(card)
 				new_my_cards.append(card)
-				dealt_any = true
+				dealt_nodes.append(card)
 		else:
-			var missing := target_hand.size() - cards.size()
-			for _i in range(missing):
+			# Deal the number of cards the server actually handed out, even if
+			# only a few of them stay on the table afterwards.
+			var previous_real := int(seat_card_counts.get(view_name, cards.size()))
+			var dealt := target_hand.size() - previous_real
+			for _i in range(dealt):
 				var card := _new_card({}, false, deck_pos)
 				cards.append(card)
-				dealt_any = true
+				dealt_nodes.append(card)
 
 		hand_cards[view_name] = cards
 
-		# Position every card in the hand, animating the newly dealt ones from
-		# the deck with a stagger so the deal reads as a real deal.
+	if dealt_nodes.is_empty():
+		return
+
+	# Lay out every hand, then animate only the freshly dealt cards from the
+	# deck, one after another, so the deal reads as a real deal.
+	for view_name in seat_order:
+		var cards: Array = _hand(view_name)
 		var count := cards.size()
 		for i in range(count):
 			var card: Node3D = cards[i]
 			var t := _hand_transform(view_name, i, count)
 			card.home_position = t["position"]
 			card.home_rotation = t["rotation"]
-			if card.position.is_equal_approx(deck_pos):
-				last_tween = _tween_card(card, card.home_position, card.home_rotation, DEAL_TIME, delay)
-				delay += DEAL_STAGGER
-			else:
+			if not dealt_nodes.has(card):
 				_tween_card(card, card.home_position, card.home_rotation, RELAYOUT_TIME)
 
-	if not dealt_any:
-		return
-
 	_set_phase_message("Dealing...")
+	var delay := 0.0
+	var last_tween: Tween = null
+	for card in dealt_nodes:
+		last_tween = _tween_card(card, card.home_position, card.home_rotation, DEAL_TIME, delay)
+		delay += DEAL_STAGGER
+
 	if last_tween != null:
 		await last_tween.finished
 	if not is_inside_tree():
@@ -835,8 +895,10 @@ func _snap_rebuild(target: Dictionary) -> void:
 	var hands: Dictionary = target.get("hands", {})
 	for view_name in seat_order:
 		var cards: Array = []
-		for card_state_raw in hands.get(view_name, []):
-			var card_state: Dictionary = card_state_raw
+		var source: Array = hands.get(view_name, [])
+		var draw_count := _visual_count(view_name, source.size())
+		for i in range(draw_count):
+			var card_state: Dictionary = source[i]
 			var face_up: bool = (view_name == "my")
 			var card := _new_card(card_state, face_up, Vector3.ZERO)
 			if view_name == "my":
@@ -845,6 +907,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 			cards.append(card)
 		hand_cards[view_name] = cards
 		_layout_hand(view_name, false)
+	_update_seat_counts(target)
 
 	for entry_raw in target.get("trick_cards", []):
 		var entry: Dictionary = entry_raw

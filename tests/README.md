@@ -28,7 +28,11 @@ Run from the project root (use the same Godot version as the project):
 `render_test.gd` prints `ALL_RENDER_OK` and exits 0 when the table renders
 correctly. It feeds real server snapshots into the real game scene and checks:
 
+- the opening deal is staggered: cards are still waiting at the deck half a
+  second in, and the whole deal takes over a second (this fails if the deal
+  animation collapses into a single instant move)
 - the opening deal draws the right cards and reveals only the local hand
+- opponent stacks are capped and physically compact
 - opponent cards are never face up while in hand
 - re-sending a snapshot does not re-create (re-deal) any card
 - cards that stay in hand keep the same node while playing

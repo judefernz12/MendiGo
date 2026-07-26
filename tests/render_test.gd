@@ -101,8 +101,31 @@ func _run() -> void:
 	await process_frame
 	ok(room_ui != null, "the game scene loads")
 
-	# --- first paint: the opening deal ---
-	await push_snapshot()
+	# --- first paint: the opening deal, sampled while it is running ---
+	var deal_started := Time.get_ticks_msec()
+	room_ui._on_snapshot_received(server._build_client_snapshot(srv_room(), human_seat))
+	await process_frame
+
+	# Half a second in, a staggered deal must still have cards waiting at the
+	# deck. If every card moved at once this is zero.
+	var sample_deadline := Time.get_ticks_msec() + 500
+	while Time.get_ticks_msec() < sample_deadline:
+		await process_frame
+	var deck_pos: Vector3 = room_ui.deck_point.position
+	var waiting_at_deck := 0
+	var moved := 0
+	for view in room_ui.seat_order:
+		for c in room_ui.hand_cards.get(view, []):
+			if c.position.distance_to(deck_pos) < 0.05:
+				waiting_at_deck += 1
+			else:
+				moved += 1
+	ok(waiting_at_deck > 0, "cards are still waiting at the deck mid-deal (deal is staggered)")
+	ok(moved > 0, "cards have started moving mid-deal")
+
+	await settle()
+	var deal_ms := Time.get_ticks_msec() - deal_started
+	ok(deal_ms > 1000, "the opening deal takes real time (%d ms)" % deal_ms)
 
 	var phase := str(st().get("phase", ""))
 	var expected_my: int = (st()["hands"][human_seat] as Array).size()
@@ -110,16 +133,31 @@ func _run() -> void:
 
 	var opp_ok := true
 	var facedown_ok := true
+	var compact_ok := true
 	for view in ["right", "top", "left"]:
 		var abs_seat := str(room_ui.local_view_to_abs[view])
 		var server_count: int = (st()["hands"][abs_seat] as Array).size()
-		if room_ui.hand_cards[view].size() != server_count:
+		var drawn: int = room_ui.hand_cards[view].size()
+		if drawn != mini(server_count, room_ui.MAX_OPPONENT_CARDS):
 			opp_ok = false
+		if drawn > room_ui.MAX_OPPONENT_CARDS:
+			compact_ok = false
 		for c in room_ui.hand_cards[view]:
 			if c.is_face_up:
 				facedown_ok = false
-	ok(opp_ok, "every opponent hand is drawn with the right number of cards")
+	ok(opp_ok, "opponent stacks are drawn at the capped size")
+	ok(compact_ok, "opponent hands never draw more than %d cards" % room_ui.MAX_OPPONENT_CARDS)
 	ok(facedown_ok, "opponent cards are face down")
+
+	# the capped stack must also be physically tight
+	var widest := 0.0
+	for view in ["right", "top", "left"]:
+		var cards: Array = room_ui.hand_cards[view]
+		if cards.size() < 2:
+			continue
+		var span: float = cards[0].home_position.distance_to(cards[cards.size() - 1].home_position)
+		widest = maxf(widest, span)
+	ok(widest < 1.0, "opponent hands stay compact (widest span %.2f)" % widest)
 
 	var my_face_up := true
 	for c in room_ui.hand_cards["my"]:

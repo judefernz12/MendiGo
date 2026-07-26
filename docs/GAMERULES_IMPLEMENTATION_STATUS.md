@@ -42,7 +42,10 @@ only used for the first paint of a game already in progress (reconnect) or if
 a delta cannot be reconciled.
 
 - Deal: cards fly from the deck one at a time in deal order, then the local
-  hand flips face up (tested)
+  hand flips face up (tested, including that the stagger really happens)
+- Opponent hands draw at most 4 tightly spaced card backs, so 6- and 8-player
+  tables stay readable. The real hand size stays on the server; the stack is
+  topped up silently after each play (tested)
 - Play: the card already in the hand moves to the trick slot and flips (tested)
 - Trick capture: the whole trick flies to the winning team's pile, which
   stacks with an offset; captured 10s are laid out face up beside it (tested)
