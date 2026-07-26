@@ -33,6 +33,11 @@ var local_player_id: String = ""
 var current_lobby_players: Array = []
 var latest_game_state_snapshot: Dictionary = {}
 
+# Handed from the lobby to the game scene. Kept in memory on purpose: two
+# clients running on one machine share user://, so writing this to a file
+# made the second client load the first client's seat.
+var pending_match_setup: Dictionary = {}
+
 func _ready() -> void:
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)

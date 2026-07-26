@@ -99,6 +99,7 @@ var dealer_draw_selected: int = -1
 
 var phase: String = ""
 var trump_holder_abs_seat_id: String = ""
+var trump_holder_view: String = ""   # view name straight from the server
 var trump_mode: String = ""
 var trump_active: bool = false
 var trump_suit: String = ""
@@ -171,10 +172,7 @@ func _ready() -> void:
 		NetworkManager.request_game_state()
 
 func _load_match_setup() -> Dictionary:
-	var config := ConfigFile.new()
-	if config.load("user://match_setup.cfg") != OK:
-		return {}
-	return config.get_value("match", "setup", {})
+	return NetworkManager.pending_match_setup
 
 func _valid_player_count(count: int) -> int:
 	if count == 4 or count == 6 or count == 8:
@@ -439,6 +437,16 @@ func _sync_meta(target: Dictionary) -> void:
 		_ensure_hand_arrays()
 		_ensure_nameplates()
 
+	# The server tells every client which absolute seat it is sitting in.
+	# Trust that over anything handed in from the lobby, so a stale or wrong
+	# handoff can never rotate this client's view of the table.
+	var my_info: Dictionary = target.get("seat_info", {}).get("my", {})
+	var my_seat_id := str(my_info.get("seat_id", ""))
+	if my_seat_id != "" and my_seat_id != local_seat_id:
+		local_seat_id = my_seat_id
+		_build_view_mapping()
+		_ensure_nameplates()
+
 	var info: Dictionary = target.get("seat_info", {})
 	for view_key in info.keys():
 		var view_name := str(view_key)
@@ -459,6 +467,7 @@ func _sync_meta(target: Dictionary) -> void:
 	trump_suit = str(target.get("trump_suit", ""))
 	lead_suit = str(target.get("current_lead_suit", ""))
 	trump_holder_abs_seat_id = str(target.get("trump_holder_seat_id", trump_holder_abs_seat_id))
+	trump_holder_view = str(target.get("hidden_trump_holder_seat", trump_holder_view))
 	dealer_view = str(target.get("dealer_seat", dealer_view))
 
 	var turn_index := int(target.get("current_turn_index", -1))
@@ -1008,8 +1017,15 @@ func _is_legal_play(card: Node3D) -> bool:
 			return str(card.suit).to_lower() == lead_suit.to_lower()
 	return true
 
+func _trump_holder_view() -> String:
+	# Prefer the view the server resolved for this client; fall back to the
+	# local mapping only before the first snapshot arrives.
+	if trump_holder_view != "":
+		return trump_holder_view
+	return str(abs_to_local_view.get(trump_holder_abs_seat_id, ""))
+
 func _is_local_trump_holder() -> bool:
-	return str(local_view_to_abs.get("my", "")) == trump_holder_abs_seat_id
+	return _trump_holder_view() == "my"
 
 func _on_play_button_pressed() -> void:
 	if selected_card == null or not _can_interact() or not my_turn:
@@ -1153,7 +1169,7 @@ func _show_trump_mode_choice() -> void:
 		open_trump_button.visible = true
 		open_trump_button.disabled = false
 	else:
-		_set_phase_message("Waiting for %s to choose the trump mode" % _display_name(str(abs_to_local_view.get(trump_holder_abs_seat_id, ""))))
+		_set_phase_message("Waiting for %s to choose the trump mode" % _display_name(_trump_holder_view()))
 		confirm_hidden_trump_button.visible = false
 		open_trump_button.visible = false
 
@@ -1382,7 +1398,7 @@ func _refresh_phase_message() -> void:
 			if _is_local_trump_holder():
 				_set_phase_message("Choose one card to hide as the trump")
 			else:
-				_set_phase_message("Waiting for %s to hide a trump card" % _display_name(str(abs_to_local_view.get(trump_holder_abs_seat_id, ""))))
+				_set_phase_message("Waiting for %s to hide a trump card" % _display_name(_trump_holder_view()))
 		"game_result", "match_result":
 			var result: Dictionary = state.get("last_game_result", {})
 			if result.is_empty():

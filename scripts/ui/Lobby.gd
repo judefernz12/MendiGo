@@ -103,9 +103,9 @@ func _mark_local_players(match_players: Array) -> Array:
 	return players_copy
 
 func _save_match_setup(setup: Dictionary) -> void:
-	var config := ConfigFile.new()
-	config.set_value("match", "setup", setup)
-	config.save("user://match_setup.cfg")
+	# In memory, not on disk: user:// is shared by every client running on
+	# the same machine, which would give both players the same seat.
+	NetworkManager.pending_match_setup = setup.duplicate(true)
 
 func _on_start_match(match_setup: Dictionary) -> void:
 	var host_peer_id: int = int(match_setup.get("host_peer_id", -1))

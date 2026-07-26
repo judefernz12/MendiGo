@@ -89,8 +89,12 @@ func _run() -> void:
 			"is_bot": bool(p.get("is_bot", false)),
 			"is_local": str(p.get("id", "")) == human_id
 		})
-	var config := ConfigFile.new()
-	config.set_value("match", "setup", {
+	var net := root.get_node_or_null("NetworkManager")
+	ok(net != null, "the NetworkManager autoload is available")
+	if net == null:
+		quit(1)
+		return
+	net.pending_match_setup = {
 		"players": players_setup,
 		"phase": "trump_mode_choice",
 		"dealer_seat_id": str(st().get("dealer_seat_id", "")),
@@ -98,8 +102,7 @@ func _run() -> void:
 		"dealer_draw_cards": [],
 		"server_authoritative": true,
 		"is_host": false
-	})
-	config.save("user://match_setup.cfg")
+	}
 
 	var packed: PackedScene = load("res://scenes/game/GameRoom3D.tscn")
 	room_ui = packed.instantiate()
