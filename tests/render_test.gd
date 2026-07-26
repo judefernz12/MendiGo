@@ -27,6 +27,9 @@ func ok(cond: bool, label: String) -> void:
 func st() -> Dictionary:
 	return server.rooms[code].get("match_state", {})
 
+func st_snapshot() -> Dictionary:
+	return server._build_client_snapshot(srv_room(), human_seat)["game_state"]
+
 func srv_room() -> Dictionary:
 	return server.rooms[code]
 
@@ -68,7 +71,10 @@ func _run() -> void:
 	server._server_start_match(code, human_id, human_peer)
 	server._server_claim_dealer_draw_card(code, human_id, 0, human_peer)
 	await process_frame
-	await process_frame
+	# the server holds on the finished draw before it deals
+	var wait_deadline := Time.get_ticks_msec() + 15000
+	while not srv_room().has("match_state") and Time.get_ticks_msec() < wait_deadline:
+		await process_frame
 	for p in srv_room().get("players", []):
 		if str(p.get("id", "")) == human_id:
 			human_seat = str(p.get("seat_id", ""))
@@ -159,11 +165,20 @@ func _run() -> void:
 		widest = maxf(widest, span)
 	ok(widest < 1.0, "opponent hands stay compact (widest span %.2f)" % widest)
 
-	var my_face_up := true
-	for c in room_ui.hand_cards["my"]:
-		if not c.is_face_up:
-			my_face_up = false
-	ok(my_face_up, "my own cards are revealed after the deal")
+	# The closed trump is picked blind, so the first batch must stay face down
+	# until the trump is settled - including the local player's own cards.
+	if phase == "trump_mode_choice" or phase == "closed_trump_card_choice":
+		var my_hidden := true
+		var leaked_face := false
+		for c in room_ui.hand_cards["my"]:
+			if c.is_face_up:
+				my_hidden = false
+		for card_state_raw in st_snapshot()["hands"]["my"]:
+			var cs: Dictionary = card_state_raw
+			if not bool(cs.get("face_hidden", false)):
+				leaked_face = true
+		ok(my_hidden, "my first batch stays face down during the trump setup")
+		ok(not leaked_face, "the server does not send my card faces during the trump setup")
 
 	# --- resending the same snapshot must not redraw anything ---
 	var before_ids := ids_of("my")
@@ -192,10 +207,32 @@ func _run() -> void:
 					kept += 1
 			ok(kept == ids_before_hide.size() - 1, "only the hidden card leaves my hand")
 		else:
-			var deadline := Time.get_ticks_msec() + 15000
+			var deadline := Time.get_ticks_msec() + 25000
 			while str(st().get("phase", "")) != "playing" and Time.get_ticks_msec() < deadline:
 				await process_frame
 			await push_snapshot()
+
+	# --- once the trump is settled my hand must be revealed ---
+	var deadline_play := Time.get_ticks_msec() + 25000
+	while str(st().get("phase", "")) != "playing" and Time.get_ticks_msec() < deadline_play:
+		await process_frame
+	await push_snapshot()
+
+	var revealed_ok := true
+	var faces_ok := true
+	var server_hand: Array = st_snapshot()["hands"]["my"]
+	var server_by_id := {}
+	for card_state_raw in server_hand:
+		var cs: Dictionary = card_state_raw
+		server_by_id[str(cs.get("card_id", ""))] = cs
+	for c in room_ui.hand_cards["my"]:
+		if not c.is_face_up:
+			revealed_ok = false
+		var cs2: Dictionary = server_by_id.get(str(c.card_id), {})
+		if cs2.is_empty() or str(c.suit) != str(cs2.get("suit", "")) or str(c.rank) != str(cs2.get("rank", "")):
+			faces_ok = false
+	ok(revealed_ok, "my hand is revealed once the trump is settled")
+	ok(faces_ok, "revealed cards show the real suit and rank from the server")
 
 	var ids_after_deal := ids_of("my")
 	ok(room_ui.hand_cards["my"].size() == (st()["hands"][human_seat] as Array).size(), "my hand matches the server after the full deal")

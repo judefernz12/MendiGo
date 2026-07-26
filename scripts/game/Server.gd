@@ -15,6 +15,8 @@ const BOT_PLAY_DELAY_S := 1.1
 const NEXT_GAME_DELAY_S := 8.0
 const TRUMP_REVEAL_HOLD_S := 3.0
 const BOT_CHOICE_DELAY_S := 2.5
+const DEALER_REVEAL_HOLD_S := 3.0
+const DEAL_ANIMATION_HOLD_S := 2.5
 
 var rooms: Dictionary = {}
 var peer_to_room: Dictionary = {}
@@ -327,10 +329,26 @@ func _deal_remaining_cards(state: Dictionary) -> Dictionary:
 				state["hands"][str(seat_id)].append(deck.pop_back())
 	state["deck"] = deck
 	state["deal_seq"] = int(state.get("deal_seq", 0)) + 1
-	state["phase"] = "playing"
+	# "dealing" blocks every action (humans and bots) until the clients have
+	# had time to animate the remaining cards; _start_play_after_deal then
+	# switches to "playing".
+	state["phase"] = "dealing"
 	state["current_turn_seat_id"] = state.get("trump_holder_seat_id", "seat_1")
 	state["current_leader_seat_id"] = state.get("trump_holder_seat_id", "seat_1")
 	return state
+
+func _start_play_after_deal(code: String) -> void:
+	await get_tree().create_timer(DEAL_ANIMATION_HOLD_S).timeout
+	if not rooms.has(code):
+		return
+	var room: Dictionary = rooms[code]
+	var state: Dictionary = room.get("match_state", {})
+	if str(state.get("phase", "")) != "dealing":
+		return
+	state["phase"] = "playing"
+	room["match_state"] = state
+	rooms[code] = room
+	_broadcast_match_state(code)
 
 func _view_mapping_for_abs_seat(abs_seat_id: String, player_count: int = ROOM_SIZE) -> Dictionary:
 	var mapping := {}
@@ -366,6 +384,12 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 	var mapping := _view_mapping_for_abs_seat(target_seat_id, player_count)
 	var abs_order := _seat_order_for_abs_seat(target_seat_id, player_count)
 
+	# The first batch is dealt face down and the closed trump is chosen blind,
+	# so nobody - not even the trump holder - may see their own cards until
+	# the trump is settled. Card ids stay real so clients keep card identity.
+	var snapshot_phase := str(state.get("phase", ""))
+	var hide_own_faces: bool = snapshot_phase == "trump_mode_choice" or snapshot_phase == "closed_trump_card_choice"
+
 	var hands_by_view := {"my": [], "right": [], "top": [], "left": []}
 	var source_hands: Dictionary = state.get("hands", {})
 	for seat_id in source_hands.keys():
@@ -374,7 +398,21 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 			continue
 		var cards: Array = source_hands[seat_id]
 		if str(seat_id) == target_seat_id:
-			hands_by_view[view_name] = cards.duplicate(true)
+			if hide_own_faces:
+				var masked_cards: Array = []
+				for card_raw in cards:
+					var card: Dictionary = card_raw
+					masked_cards.append({
+						"card_id": card.get("card_id", ""),
+						"id": 0,
+						"suit": "clubs",
+						"rank": "2",
+						"is_face_up": false,
+						"face_hidden": true
+					})
+				hands_by_view[view_name] = masked_cards
+			else:
+				hands_by_view[view_name] = cards.duplicate(true)
 		else:
 			var hidden_cards: Array = []
 			for i in range(cards.size()):
@@ -984,6 +1022,20 @@ func _decide_dealer_from_draw(code: String) -> void:
 	var trump_holder_index := (dealer_index + step + player_count) % player_count
 	room["dealer_seat_id"] = dealer_seat
 	room["trump_holder_seat_id"] = "seat_%d" % trump_holder_index
+	# Hold on the finished draw so everyone can see the revealed cards and
+	# who won the deal before the table is cleared for dealing.
+	room["phase"] = "dealer_decided"
+	rooms[code] = room
+	_broadcast_dealer_draw(code)
+	_begin_match_after_dealer_reveal(code)
+
+func _begin_match_after_dealer_reveal(code: String) -> void:
+	await get_tree().create_timer(DEALER_REVEAL_HOLD_S).timeout
+	if not rooms.has(code):
+		return
+	var room: Dictionary = rooms[code]
+	if str(room.get("phase", "")) != "dealer_decided":
+		return
 	room["phase"] = "match"
 	room["match_state"] = _create_match_state(room)
 	rooms[code] = room
@@ -1036,15 +1088,20 @@ func _apply_trump_mode_choice(code: String, seat_id: String, mode: String) -> vo
 		return
 
 	state["trump_mode"] = "open" if mode == "open" else "hidden"
+	var dealt_remaining := false
 	if state["trump_mode"] == "open":
 		state = _deal_remaining_cards(state)
+		dealt_remaining = true
 	else:
 		state["phase"] = "closed_trump_card_choice"
 
 	room["match_state"] = state
 	rooms[code] = room
 	_broadcast_match_state(code)
-	_maybe_auto_choose_hidden_trump_for_bot(code)
+	if dealt_remaining:
+		_start_play_after_deal(code)
+	else:
+		_maybe_auto_choose_hidden_trump_for_bot(code)
 
 func _maybe_auto_choose_hidden_trump_for_bot(code: String) -> void:
 	var room: Dictionary = rooms.get(code, {})
@@ -1096,6 +1153,7 @@ func _apply_hidden_trump_choice(code: String, seat_id: String, card_id: String) 
 	room["match_state"] = state
 	rooms[code] = room
 	_broadcast_match_state(code)
+	_start_play_after_deal(code)
 
 func _apply_hidden_trump_reveal(code: String, seat_id: String) -> void:
 	var room: Dictionary = rooms[code]

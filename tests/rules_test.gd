@@ -95,6 +95,10 @@ func do_dealer_draw(player_count: int) -> void:
 	server._server_claim_dealer_draw_card(code, human_id, 0, human_peer)
 	await process_frame
 	await process_frame
+	# the draw result is held so players can see who won before dealing
+	ok(str(room().get("phase", "")) == "dealer_decided", "the finished draw is shown before dealing")
+	ok(not room().has("match_state"), "no cards are dealt during the draw reveal")
+	await wait_until(func(): return room().has("match_state"), 15000)
 
 func find_human_seat() -> void:
 	for p in room().get("players", []):
@@ -158,11 +162,21 @@ func play_match(player_count: int) -> void:
 		var my_hand: Array = s["hands"][human_seat]
 		server._server_receive_game_action(code, human_id, {"type": "confirm_hidden_trump", "card_id": str(my_hand[0]["card_id"])}, human_peer)
 		await process_frame
-	else:
-		await wait_until(func(): return str(st().get("phase", "")) == "playing", 15000)
+		ok(str(st().get("phase", "")) == "dealing", "the remaining deal runs before play starts")
+
+	# No action may be accepted while the table is still being dealt.
+	if str(st().get("phase", "")) == "dealing":
+		var dealing_state := st()
+		var dealing_seat := str(dealing_state.get("current_turn_seat_id", ""))
+		var dealing_hand: Array = dealing_state["hands"][dealing_seat]
+		var size_before := dealing_hand.size()
+		server._apply_play_card_action(code, dealing_seat, str(dealing_hand[0]["card_id"]))
+		ok((st()["hands"][dealing_seat] as Array).size() == size_before, "no card can be played while dealing")
+
+	await wait_until(func(): return str(st().get("phase", "")) == "playing", 25000)
 
 	s = st()
-	ok(str(s["phase"]) == "playing", "play begins after the trump setup")
+	ok(str(s["phase"]) == "playing", "play begins after the deal completes")
 	if str(s["phase"]) != "playing":
 		return
 
@@ -398,55 +412,5 @@ func deal_unit_check(player_count: int, cards_each: int, first_batch: int, patte
 			full_ok = false
 	ok(full_ok, "%d players hold %d cards after the full deal" % [player_count, cards_each])
 	ok((s2["deck"] as Array).size() == 0, "%d players: the deck is fully dealt" % player_count)
-	ok(str(s2["phase"]) == "playing", "%d players: play starts after the final batch" % player_count)
+	ok(str(s2["phase"]) == "dealing", "%d players: the final batch enters the dealing phase" % player_count)
 
-func deal_check(player_count: int, cards_each: int, first_batch: int) -> void:
-	await setup_room(player_count)
-	await do_dealer_draw(player_count)
-	find_human_seat()
-	var s := st()
-	ok(not s.is_empty(), "match created for %d players" % player_count)
-	if s.is_empty():
-		return
-
-	var deck_total := (s["deck"] as Array).size()
-	for seat in s["hands"].keys():
-		deck_total += (s["hands"][seat] as Array).size()
-	ok(deck_total == 48, "%d players use a 48-card deck" % player_count)
-
-	var has_two := false
-	for c in s["deck"]:
-		if str(c["rank"]) == "2":
-			has_two = true
-	for seat in s["hands"].keys():
-		for c in s["hands"][seat]:
-			if str(c["rank"]) == "2":
-				has_two = true
-	ok(not has_two, "the 2s are removed for %d players" % player_count)
-
-	ok(s["hands"].size() == player_count, "%d seats are dealt" % player_count)
-	var fb_ok := true
-	for seat in s["hands"].keys():
-		if (s["hands"][seat] as Array).size() != first_batch:
-			fb_ok = false
-	ok(fb_ok, "%d players get a first batch of %d" % [player_count, first_batch])
-
-	var holder := str(s["trump_holder_seat_id"])
-	if holder == human_seat:
-		server._server_choose_trump_mode(code, human_id, "open", human_peer)
-	var waited := 0
-	while str(st().get("phase", "")) != "playing" and waited < 400:
-		await process_frame
-		waited += 1
-	s = st()
-	if str(s.get("phase", "")) == "playing":
-		var full_ok := true
-		for seat in s["hands"].keys():
-			var expect := cards_each
-			if str(s.get("trump_mode", "")) == "hidden" and str(seat) == str(s["hidden_trump"]["holder_seat_id"]):
-				expect = cards_each - 1
-			if (s["hands"][seat] as Array).size() != expect:
-				full_ok = false
-		ok(full_ok, "%d players hold %d cards after the full deal" % [player_count, cards_each])
-	else:
-		ok(false, "%d-player game reached the playing phase" % player_count)

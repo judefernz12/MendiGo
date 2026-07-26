@@ -399,6 +399,7 @@ func _apply_snapshot(target: Dictionary) -> void:
 		if _is_fresh_deal(target):
 			_clear_cards()
 			await _animate_deal(target)
+			await _reveal_my_hand(target)
 			_sync_opponent_stacks(target)
 			_update_seat_counts(target)
 		else:
@@ -410,6 +411,7 @@ func _apply_snapshot(target: Dictionary) -> void:
 		await _animate_clear_table()
 		_clear_cards()
 		await _animate_deal(target)
+		await _reveal_my_hand(target)
 		_sync_opponent_stacks(target)
 		_update_seat_counts(target)
 		return
@@ -418,6 +420,7 @@ func _apply_snapshot(target: Dictionary) -> void:
 	await _animate_hidden_trump_set_aside(previous, target)
 	await _animate_plays(target)
 	await _animate_deal(target)
+	await _reveal_my_hand(target)
 	await _animate_trump_reveal(previous, target)
 	await _animate_hidden_trump_return(previous, target)
 
@@ -460,7 +463,7 @@ func _sync_meta(target: Dictionary) -> void:
 
 	var turn_index := int(target.get("current_turn_index", -1))
 	my_turn = (turn_index == 0)
-	table_busy = bool(target.get("trick_is_resolving", false)) or bool(target.get("revealing_trump", false))
+	table_busy = bool(target.get("trick_is_resolving", false)) or bool(target.get("revealing_trump", false)) or phase == "dealing"
 
 func _is_new_game(previous: Dictionary, target: Dictionary) -> bool:
 	var prev_phase := str(previous.get("phase", ""))
@@ -608,21 +611,49 @@ func _animate_deal(target: Dictionary) -> void:
 	if not is_inside_tree():
 		return
 
-	# Reveal the local hand once the batch has landed.
-	var flipped := false
-	for card in new_my_cards:
+	# Cards stay face down here. _reveal_my_hand() turns them over once the
+	# trump has been settled, so the closed trump is chosen blind.
+	if new_my_cards.is_empty():
+		return
+	_clear_phase_message()
+
+func _in_trump_setup() -> bool:
+	return phase == "trump_mode_choice" or phase == "closed_trump_card_choice"
+
+func _reveal_my_hand(target: Dictionary) -> void:
+	# The server sends placeholder faces during the trump setup, so refresh
+	# the card data first, then turn over anything still face down.
+	if _in_trump_setup():
+		return
+
+	var by_id := {}
+	for card_state_raw in (target.get("hands", {}) as Dictionary).get("my", []):
+		var card_state: Dictionary = card_state_raw
+		by_id[str(card_state.get("card_id", ""))] = card_state
+
+	var to_flip: Array = []
+	for card in _hand("my"):
 		if not is_instance_valid(card):
 			continue
+		var card_state: Dictionary = by_id.get(str(card.card_id), {})
+		if card_state.is_empty():
+			continue
+		if str(card.suit) != str(card_state.get("suit", "")) or str(card.rank) != str(card_state.get("rank", "")):
+			card.set_card_data(card_state)
+		if not card.is_face_up:
+			to_flip.append(card)
+
+	if to_flip.is_empty():
+		return
+
+	for card in to_flip:
 		card.flip_card()
-		flipped = true
 		await get_tree().create_timer(FLIP_STAGGER).timeout
 		if not is_inside_tree():
 			return
-	if flipped:
-		# let the last flip finish before the state counts as drawn
-		await get_tree().create_timer(0.26).timeout
-		if not is_inside_tree():
-			return
+	await get_tree().create_timer(0.26).timeout
+	if not is_inside_tree():
+		return
 
 	if my_hand_sorted:
 		_sort_my_hand()
@@ -899,7 +930,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 		var draw_count := _visual_count(view_name, source.size())
 		for i in range(draw_count):
 			var card_state: Dictionary = source[i]
-			var face_up: bool = (view_name == "my")
+			var face_up: bool = (view_name == "my") and not _in_trump_setup()
 			var card := _new_card(card_state, face_up, Vector3.ZERO)
 			if view_name == "my":
 				card.clickable = true
@@ -1094,14 +1125,18 @@ func _on_dealer_draw_updated(match_data: Dictionary) -> void:
 	phase = str(match_data.get("phase", phase))
 	dealer_draw_cards = (match_data.get("dealer_draw_cards", []) as Array).duplicate(true)
 	trump_holder_abs_seat_id = str(match_data.get("trump_holder_seat_id", trump_holder_abs_seat_id))
+	var dealer_abs := str(match_data.get("dealer_seat_id", ""))
+	if dealer_abs != "":
+		dealer_view = str(abs_to_local_view.get(dealer_abs, dealer_view))
 
 	if dealer_draw_nodes.is_empty():
 		_build_dealer_draw_cards()
-		return
-	for card_state_raw in dealer_draw_cards:
-		var card_state: Dictionary = card_state_raw
-		if bool(card_state.get("is_claimed", false)):
-			_place_claimed_draw_card(card_state, true)
+	else:
+		for card_state_raw in dealer_draw_cards:
+			var card_state: Dictionary = card_state_raw
+			if bool(card_state.get("is_claimed", false)):
+				_place_claimed_draw_card(card_state, true)
+	_refresh_phase_message()
 
 func _on_trump_mode_choice_requested(match_data: Dictionary) -> void:
 	_on_dealer_draw_updated(match_data)
@@ -1243,7 +1278,7 @@ func _refresh_buttons() -> void:
 		arrange_button.visible = false
 		return
 
-	arrange_button.visible = not _hand("my").is_empty()
+	arrange_button.visible = not _hand("my").is_empty() and not _in_trump_setup()
 
 	confirm_hidden_trump_button.text = "Hide This Card"
 	confirm_hidden_trump_button.visible = choosing_card
@@ -1337,6 +1372,10 @@ func _refresh_phase_message() -> void:
 				_set_phase_message("Pick a card - the highest card deals")
 			else:
 				_set_phase_message("Waiting for the other players to pick...")
+		"dealer_decided":
+			_set_phase_message("%s deals this game" % _display_name(dealer_view))
+		"dealing":
+			_set_phase_message("Dealing...")
 		"trump_mode_choice":
 			_show_trump_mode_choice()
 		"closed_trump_card_choice":
