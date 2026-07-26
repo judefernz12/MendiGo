@@ -1064,6 +1064,10 @@ func _on_dealer_draw_clicked(draw_index: int) -> void:
 		return
 	dealer_draw_selected = draw_index
 	NetworkManager.claim_dealer_draw_card(draw_index)
+	for other in dealer_draw_nodes.values():
+		if is_instance_valid(other):
+			other.clickable = false
+	_refresh_phase_message()
 
 func _place_claimed_draw_card(card_state: Dictionary, animate: bool) -> void:
 	var draw_index := int(card_state.get("draw_index", 0))
@@ -1328,6 +1332,11 @@ func _clear_phase_message() -> void:
 
 func _refresh_phase_message() -> void:
 	match phase:
+		"dealer_draw":
+			if dealer_draw_selected == -1:
+				_set_phase_message("Pick a card - the highest card deals")
+			else:
+				_set_phase_message("Waiting for the other players to pick...")
 		"trump_mode_choice":
 			_show_trump_mode_choice()
 		"closed_trump_card_choice":
