@@ -11,6 +11,8 @@ Run from the project root (use the same Godot version as the project):
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/render_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/multiplayer_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/lobby_test.gd
+& "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/layout_test.gd
+& "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/trump_test.gd
 ```
 
 `rules_test.gd` prints `ALL_RULES_OK` and exits 0 when every rule in
@@ -33,6 +35,9 @@ Run from the project root (use the same Godot version as the project):
 - team selection: a choice moves the player to that side's seats, nobody else
   is shuffled by it, a full side is refused, a choice from the wrong peer is
   refused, seats lock once the match starts, and bots fill what is left
+- the player who opens the hidden trump must play a trump that turn if they
+  hold one, may play anything if they do not, is the only player so
+  constrained, the obligation clears once they play, and bots obey it too
 
 `render_test.gd` prints `ALL_RENDER_OK` and exits 0 when the table renders
 correctly. It feeds real server snapshots into the real game scene and checks:
@@ -67,5 +72,30 @@ empty seats read as bots, the headers show how full each side is, the join
 buttons reflect where the local player actually sits, and only the host sees
 the start button.
 
-`rules_test.gd` and `render_test.gd` take 1-3 minutes because they wait out the
-server's real bot and trick-resolve delays; the other two are quick.
+`layout_test.gd` prints `ALL_LAYOUT_OK`. "The table looks cluttered" is
+otherwise untestable, so the rules are written down here. It deals a real game,
+projects every card and HUD element onto a 1280x720 screen through the real
+camera, and asserts that nothing which must stay apart overlaps by more than a
+few pixels: the local hand against the piles, captured 10s, hidden trump slot,
+trick and action buttons; nameplates against cards, panels and each other; and
+everything inside the screen. It also checks where a full 13-trick pile lands,
+because the pile steps forward as it grows and a single captured trick proves
+nothing.
+
+Headless always comes up with a square window and refuses to resize, so this
+test recomputes both the camera projection and the anchored HUD rects for the
+shipping 1280x720 instead of reading the live viewport. Change the resolution
+in `project.godot` and `VIEW` in the test has to change with it.
+
+`trump_test.gd` prints `ALL_TRUMP_OK`. It walks the real game scene through the
+whole closed-trump life cycle with hand-built snapshots, so it does not have to
+wait for a void hand to turn up in a real game. It checks the card is set aside
+face down, flips in place on reveal, and - the important one - that the card
+which flies back to the hand is the very node from the trump slot rather than a
+fresh one dealt out of the deck. It also checks the reveal obligation on the
+client, and that "Reveal Trump" is offered the moment the turn starts rather
+than only after a card is tapped.
+
+`rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
+they wait out the server's real bot and trick-resolve delays; the rest are
+quick.

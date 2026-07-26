@@ -349,8 +349,7 @@ func _run() -> void:
 		if child is ColorRect and (child as ColorRect).color.a > 0.9:
 			confetti += 1
 	ok(confetti > 0, "winning a court throws confetti")
-	ok(room_ui.result_panel.visible, "the result chip is shown once the game is decided")
-	ok(str(room_ui.result_label.text).contains("COURT"), "the result chip calls out the court")
+	ok(room_ui.phase_message_panel.visible, "the message banner is shown once the game is decided")
 	ok(str(room_ui.phase_message_label.text).contains("COURT"), "the banner message calls out the court")
 
 	# The same result resent must not stack a second overlay.
@@ -368,7 +367,7 @@ func _run() -> void:
 	room_ui._on_snapshot_received(reset_snapshot)
 	await settle()
 	ok(not room_ui.court_celebrated, "a new game re-arms the celebration")
-	ok(not room_ui.result_panel.visible, "the result chip is hidden again during play")
+	ok(not str(room_ui.phase_message_label.text).contains("COURT"), "the court message clears when a new game starts")
 
 	_report()
 

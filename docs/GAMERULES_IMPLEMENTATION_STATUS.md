@@ -19,6 +19,12 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Hidden trump reveal: only the player on turn and only when void in the lead
   suit; the card flips face up for 3 seconds, then returns to the holder's
   hand; play is blocked for the whole reveal
+- The player who opened the trump must play a trump on that same turn if they
+  hold one, and is free to play anything if they do not. Enforced for humans
+  and bots, mirrored on the client so illegal cards cannot even be picked, and
+  cleared as soon as they play (tested). **This rule is not in
+  `GameRules.txt`** - it was added on request; the spec only says legal play
+  "must account for the newly returned trump card"
 - Follow suit enforced; out-of-turn, duplicate and late plays rejected (tested)
 - Trick winner: highest trump, otherwise highest card of the lead suit,
   stamped with the trump state used to resolve it (tested every trick)
@@ -73,13 +79,32 @@ a delta cannot be reconciled.
   confetti. The server holds the result for 12 s instead of 8 s so the
   celebration can finish (tested)
 
-## HUD
+## HUD and table layout
 
-The top-left scoreboard is a labelled grid rather than a block of text: a row
-per team with score, 10s (shown as `n / 4` against the court target, which
-highlights as a team closes in) and tricks, then the dealer and whose turn it
-is. Trump stays on the top right with its suit icon. The result chip only
-appears between games (tested).
+The top-left panel carries everything about the match in one place: the trump
+suit with its icon at the top, then a labelled grid with a row per team giving
+score, 10s (shown as `n / 4` against the court target, highlighting as a team
+closes in) and tricks, then the dealer and whose turn it is. There is no
+separate result chip - the message banner at the top of the screen carries the
+result, coloured by who won.
+
+Table geometry is checked, not eyeballed. `tests/layout_test.gd` projects every
+card and HUD element onto a 1280x720 screen through the real camera and asserts
+that things which must not sit on top of each other do not: the local hand
+against the piles, the captured 10s, the hidden trump slot, the trick and the
+action buttons; nameplates against cards, panels and each other; and everything
+against the screen edges. It also checks where a full 13-trick pile ends up,
+since the pile steps forward as it grows.
+
+Notable consequences of that check:
+
+- names sit a fixed distance in front of their seat rather than being lerped
+  towards the table centre, which used to land them on the cards
+- the pile's forward step is 0.022 per trick; the old 0.13 walked a full pile
+  most of a card-length across the table and off the bottom of the screen
+- captured 10s are laid out in a column on the far side of their pile
+- the local fan is narrower and shallower so it clears the piles and buttons
+- the camera sits higher (y 6.7) to give the table more room
 
 ## Still needs manual testing in the editor
 

@@ -380,6 +380,7 @@ func _create_match_state(room: Dictionary) -> Dictionary:
 		"last_game_result": {},
 		"resolving": false,
 		"revealing_trump": false,
+		"must_play_trump_seat_id": "",
 		"trick_seq": 0,
 		"last_trick": {},
 		"deal_seq": 1
@@ -575,6 +576,7 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 		"trump_suit": state.get("trump_suit", ""),
 		"hidden_trump_revealed": hidden_trump.get("is_revealed", false),
 		"awaiting_hidden_trump_play": false,
+		"must_play_trump": str(state.get("must_play_trump_seat_id", "")) == target_seat_id,
 		"hidden_trump": hidden_trump,
 		"revealing_trump": bool(state.get("revealing_trump", false)),
 		"deal_order": _deal_order_views(state, mapping),
@@ -690,10 +692,19 @@ func _hand_has_suit(hand: Array, suit: String) -> bool:
 	return false
 
 func _is_play_legal(state: Dictionary, seat_id: String, card: Dictionary) -> bool:
+	var hand: Array = state.get("hands", {}).get(seat_id, [])
+
+	# The player who revealed the hidden trump must play a trump on that same
+	# turn if they hold one. They are void in the lead suit by definition, so
+	# this is the only constraint on them; with no trump in hand they are free.
+	if str(state.get("must_play_trump_seat_id", "")) == seat_id:
+		var forced_suit := str(state.get("trump_suit", ""))
+		if forced_suit != "" and _hand_has_suit(hand, forced_suit):
+			return str(card.get("suit", "")) == forced_suit
+
 	var lead_suit := str(state.get("lead_suit", ""))
 	if lead_suit == "":
 		return true
-	var hand: Array = state.get("hands", {}).get(seat_id, [])
 	if _hand_has_suit(hand, lead_suit):
 		return str(card.get("suit", "")) == lead_suit
 	return true
@@ -839,14 +850,23 @@ func _finish_game(state: Dictionary, ended_early: bool = false) -> Dictionary:
 
 func _choose_bot_card(state: Dictionary, seat_id: String) -> String:
 	var hand: Array = state.get("hands", {}).get(seat_id, [])
+	if hand.is_empty():
+		return ""
+
+	# A bot that opened the trump owes a trump card, same as a human.
+	if str(state.get("must_play_trump_seat_id", "")) == seat_id:
+		var forced_suit := str(state.get("trump_suit", ""))
+		for card_raw in hand:
+			var forced: Dictionary = card_raw
+			if str(forced.get("suit", "")) == forced_suit:
+				return str(forced.get("card_id", ""))
+
 	var lead_suit := str(state.get("lead_suit", ""))
 	if lead_suit != "":
 		for card_raw in hand:
 			var card: Dictionary = card_raw
 			if str(card.get("suit", "")) == lead_suit:
 				return str(card.get("card_id", ""))
-	if hand.is_empty():
-		return ""
 	return str((hand[0] as Dictionary).get("card_id", ""))
 
 func _seat_is_bot(room: Dictionary, seat_id: String) -> bool:
@@ -1028,6 +1048,8 @@ func _apply_play_card_action(code: String, seat_id: String, card_id: String) -> 
 	var was_void := lead_suit != "" and not _hand_has_suit(hand, lead_suit)
 	hand.remove_at(card_index)
 	state["hands"][seat_id] = hand
+	if str(state.get("must_play_trump_seat_id", "")) == seat_id:
+		state["must_play_trump_seat_id"] = ""
 
 	if lead_suit == "":
 		state["lead_suit"] = str(card.get("suit", ""))
@@ -1276,6 +1298,9 @@ func _apply_hidden_trump_reveal(code: String, seat_id: String) -> void:
 	hidden_trump["has_returned_to_hand"] = false
 	state["hidden_trump"] = hidden_trump
 	state["revealing_trump"] = true
+	# Whoever opened the trump owes a trump card this turn if they hold one.
+	# Cleared as soon as they play; see _is_play_legal.
+	state["must_play_trump_seat_id"] = seat_id
 
 	room["match_state"] = state
 	rooms[code] = room

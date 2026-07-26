@@ -63,6 +63,8 @@ func _run() -> void:
 	team_choice_check()
 	print("=== court ends the game immediately ===")
 	court_early_end_check()
+	print("=== the revealer owes a trump ===")
+	reveal_must_play_trump_check()
 	print("=== 4-player full match ===")
 	await play_match(4)
 
@@ -522,6 +524,122 @@ func court_early_end_check() -> void:
 	var out3: Dictionary = server._finish_trick_if_needed(s3)
 	ok(str(out3["phase"]) == "game_result", "the game still ends when the last trick is played")
 	ok(not bool((out3["last_game_result"] as Dictionary).get("ended_early", true)), "a court on the final trick is not flagged early")
+
+func human_players(count: int) -> Array:
+	# All-human so no bot timer fires while a deterministic check is running.
+	var players: Array = []
+	for i in range(count):
+		players.append({
+			"id": "hp%d" % i, "name": "Player %d" % i, "peer_id": 10 + i,
+			"ready": true, "is_bot": false, "is_connected": true,
+			"seat_id": "seat_%d" % i, "team_choice": ""
+		})
+	return players
+
+func reveal_room(revealer_hand: Array) -> Dictionary:
+	# seat_1 leads hearts, seat_2 is void in hearts and may open the trump.
+	var players := human_players(4)
+	var fake_room := {
+		"code": "REVEAL",
+		"settings": server._normalize_room_settings({"player_count": 4}),
+		"players": players,
+		"dealer_seat_id": "seat_0",
+		"trump_holder_seat_id": "seat_1"
+	}
+	var s: Dictionary = server._create_match_state(fake_room)
+	s = server._deal_remaining_cards(s)
+	s["phase"] = "playing"
+	s["trump_mode"] = "hidden"
+	s["trump_active"] = false
+	s["trump_suit"] = ""
+	s["hidden_trump"] = {
+		"card_id": "ht", "id": 500, "suit": "spades", "rank": "ace",
+		"holder_seat_id": "seat_1", "is_set_aside": true,
+		"is_revealed": false, "has_returned_to_hand": false
+	}
+	s["lead_suit"] = "hearts"
+	s["current_leader_seat_id"] = "seat_1"
+	s["current_turn_seat_id"] = "seat_2"
+	s["trick_cards"] = [{"seat_id": "seat_1", "card_id": "lead", "id": 600, "suit": "hearts", "rank": "9"}]
+	s["hands"]["seat_2"] = revealer_hand.duplicate(true)
+	fake_room["match_state"] = s
+	server.rooms["REVEAL"] = fake_room
+	return fake_room
+
+func reveal_hand_size() -> int:
+	return (server.rooms["REVEAL"]["match_state"]["hands"]["seat_2"] as Array).size()
+
+func clear_reveal_hold() -> void:
+	# The server holds the reveal for 3 s before play resumes; skip the wait.
+	var room: Dictionary = server.rooms["REVEAL"]
+	var s: Dictionary = room["match_state"]
+	s["revealing_trump"] = false
+	room["match_state"] = s
+	server.rooms["REVEAL"] = room
+
+func reveal_must_play_trump_check() -> void:
+	# The revealer holds a trump: they must play it and nothing else.
+	reveal_room([
+		{"card_id": "r_spade", "id": 601, "suit": "spades", "rank": "5"},
+		{"card_id": "r_club", "id": 602, "suit": "clubs", "rank": "7"}
+	])
+	server._apply_hidden_trump_reveal("REVEAL", "seat_2")
+	var s: Dictionary = server.rooms["REVEAL"]["match_state"]
+	ok(bool(s.get("trump_active", false)) and str(s.get("trump_suit", "")) == "spades", "revealing turns the hidden suit into the trump")
+	ok(str(s.get("must_play_trump_seat_id", "")) == "seat_2", "the revealer is marked as owing a trump")
+
+	var snap: Dictionary = server._build_client_snapshot(server.rooms["REVEAL"], "seat_2")["game_state"]
+	ok(bool(snap.get("must_play_trump", false)), "the revealer's snapshot says they owe a trump")
+	var other: Dictionary = server._build_client_snapshot(server.rooms["REVEAL"], "seat_3")["game_state"]
+	ok(not bool(other.get("must_play_trump", false)), "nobody else is told they owe a trump")
+
+	clear_reveal_hold()
+	var before := reveal_hand_size()
+	server._apply_play_card_action("REVEAL", "seat_2", "r_club")
+	ok(reveal_hand_size() == before, "the revealer cannot discard an off-suit card while holding a trump")
+	server._apply_play_card_action("REVEAL", "seat_2", "r_spade")
+	ok(reveal_hand_size() == before - 1, "the revealer may play their trump")
+	ok(str(server.rooms["REVEAL"]["match_state"].get("must_play_trump_seat_id", "")) == "", "the obligation clears once the trump is played")
+	server.rooms.erase("REVEAL")
+
+	# The revealer holds no trump: they are free to play anything.
+	reveal_room([
+		{"card_id": "f_club", "id": 603, "suit": "clubs", "rank": "7"},
+		{"card_id": "f_diamond", "id": 604, "suit": "diamonds", "rank": "4"}
+	])
+	server._apply_hidden_trump_reveal("REVEAL", "seat_2")
+	clear_reveal_hold()
+	var free_before := reveal_hand_size()
+	server._apply_play_card_action("REVEAL", "seat_2", "f_club")
+	ok(reveal_hand_size() == free_before - 1, "a revealer with no trump may play any card")
+	server.rooms.erase("REVEAL")
+
+	# A bot that reveals owes the same trump.
+	reveal_room([
+		{"card_id": "b_club", "id": 605, "suit": "clubs", "rank": "7"},
+		{"card_id": "b_spade", "id": 606, "suit": "spades", "rank": "3"}
+	])
+	server._apply_hidden_trump_reveal("REVEAL", "seat_2")
+	clear_reveal_hold()
+	var bot_state: Dictionary = server.rooms["REVEAL"]["match_state"]
+	ok(str(server._choose_bot_card(bot_state, "seat_2")) == "b_spade", "a bot that owes a trump plays its trump")
+	server.rooms.erase("REVEAL")
+
+	# Nobody else is constrained: an ordinary void player may still discard.
+	reveal_room([
+		{"card_id": "o_spade", "id": 607, "suit": "spades", "rank": "5"},
+		{"card_id": "o_club", "id": 608, "suit": "clubs", "rank": "7"}
+	])
+	var room: Dictionary = server.rooms["REVEAL"]
+	var plain: Dictionary = room["match_state"]
+	plain["trump_active"] = true
+	plain["trump_suit"] = "spades"
+	room["match_state"] = plain
+	server.rooms["REVEAL"] = room
+	var plain_before := reveal_hand_size()
+	server._apply_play_card_action("REVEAL", "seat_2", "o_club")
+	ok(reveal_hand_size() == plain_before - 1, "a void player who did not reveal may still discard off-suit")
+	server.rooms.erase("REVEAL")
 
 func deal_unit_check(player_count: int, cards_each: int, first_batch: int, pattern: Array) -> void:
 	# Exercises the dealing rules directly, with no bot timing involved.

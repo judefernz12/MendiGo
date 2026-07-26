@@ -17,13 +17,22 @@ const ALL_VIEWS := ["my", "right", "top", "left", "seat4", "seat5", "seat6", "se
 # Table geometry, expressed in the local space of the Cards node so every card,
 # slot and pile shares one coordinate system. The 4-player values reproduce the
 # original hand-placed markers.
-const SEAT_RING_CENTER := Vector3(0, 1, -0.3)
-const SEAT_RING_RX := 3.2
-const SEAT_RING_RZ := 2.1
-const TRICK_RING_CENTER := Vector3(0, 1, 0)
-const TRICK_RING_RX := 1.2
-const TRICK_RING_RZ := 0.8
+const SEAT_RING_CENTER := Vector3(0, 1, -0.30)
+const SEAT_RING_RX := 3.6
+const SEAT_RING_RZ := 1.75
+const TRICK_RING_CENTER := Vector3(0, 1, 0.05)
+const TRICK_RING_RX := 1.15
+const TRICK_RING_RZ := 0.50
 const CARD_FLAT_ROT := Vector3(90, 0, 0)
+
+# A flat card's footprint on the table, from the mesh in Card3D.tscn.
+const CARD_W := 0.53
+const CARD_H := 0.742
+
+# Names are drawn this far in front of their seat (towards the bottom of the
+# screen), which keeps them off the cards instead of on top of them.
+const NAMEPLATE_DROP := 0.95
+const NAMEPLATE_SIZE := Vector2(140, 22)
 
 # Animation timing.
 const DEAL_TIME := 0.22
@@ -36,9 +45,14 @@ const TRUMP_MOVE_TIME := 0.35
 const RELAYOUT_TIME := 0.18
 
 # Captured pile stacking (top-down camera: lift slightly and step forward).
-const PILE_Y_STEP := 0.012
-const PILE_Z_STEP := 0.13
-const TEN_SPACING := 0.2
+# The z step has to stay small: 13 tricks at the old 0.13 walked the pile most
+# of a card-length across the table and into the player's hand.
+const PILE_Y_STEP := 0.006
+const PILE_Z_STEP := 0.022
+# Captured 10s are laid out in a column beside the pile, on the far side from
+# the table centre.
+const TEN_OUTWARD := 0.72
+const TEN_SPACING := 0.26
 
 const TURN_TIME_LIMIT := 20.0
 
@@ -115,6 +129,7 @@ var trump_mode: String = ""
 var trump_active: bool = false
 var trump_suit: String = ""
 var lead_suit: String = ""
+var must_play_trump: bool = false   # I opened the trump and owe a trump card
 var dealer_view: String = ""
 var my_turn: bool = false
 var table_busy: bool = true          # resolving / revealing / animating
@@ -132,8 +147,6 @@ var trump_icon_tween: Tween = null
 var nameplates: Dictionary = {}
 var hud_values: Dictionary = {}      # scoreboard cell name -> Label
 var score_panel: PanelContainer = null
-var result_panel: PanelContainer = null
-var result_label: Label = null
 var leave_button: Button = null
 
 var court_celebrated: bool = false
@@ -262,6 +275,9 @@ func _seat_anchor_position(view_name: String) -> Vector3:
 	var theta := _seat_angle(view_name)
 	return SEAT_RING_CENTER + Vector3(cos(theta) * SEAT_RING_RX, 0.0, sin(theta) * SEAT_RING_RZ)
 
+func _nameplate_anchor(view_name: String) -> Vector3:
+	return _seat_anchor_position(view_name) + Vector3(0.0, 0.0, NAMEPLATE_DROP)
+
 func _trick_slot_position(view_name: String) -> Vector3:
 	var theta := _seat_angle(view_name)
 	return TRICK_RING_CENTER + Vector3(cos(theta) * TRICK_RING_RX, 0.0, sin(theta) * TRICK_RING_RZ)
@@ -270,14 +286,16 @@ func _play_rotation(view_name: String) -> Vector3:
 	return Vector3(90.0, 0.0, -20.0 * cos(_seat_angle(view_name)))
 
 func _my_hand_transform(index: int, count: int) -> Dictionary:
+	# The fan is deliberately narrow and shallow: a wider one ran into the
+	# captured piles at the sides and the action buttons at the bottom.
 	var center := (count - 1) / 2.0
 	var spacing := 0.5
 	if count > 1:
-		spacing = min(0.8, 4.0 / float(count - 1))
+		spacing = min(0.62, 3.4 / float(count - 1))
 	var offset := (index - center) * spacing
 	return {
-		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, abs(index - center) * 0.10),
-		"rotation": Vector3(90, 0, (index - center) * 5.5)
+		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, abs(index - center) * 0.045),
+		"rotation": Vector3(90, 0, (index - center) * 4.5)
 	}
 
 func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dictionary:
@@ -312,6 +330,13 @@ func _pile_marker(team: String) -> Marker3D:
 
 func _pile_position(team: String, stack_index: int) -> Vector3:
 	return _pile_marker(team).position + Vector3(0, PILE_Y_STEP * stack_index, PILE_Z_STEP * stack_index)
+
+func _pile_ten_position(team: String, index: int) -> Vector3:
+	# Outward means away from the middle of the table, so the 10s never drift
+	# into the trick or the local hand.
+	var base := _pile_marker(team).position
+	var outward := -1.0 if base.x < 0.0 else 1.0
+	return base + Vector3(outward * TEN_OUTWARD, 0.05 + index * 0.002, (float(index) - 1.5) * TEN_SPACING)
 
 func _to_world(local_pos: Vector3) -> Vector3:
 	return cards_node.to_global(local_pos)
@@ -405,6 +430,11 @@ func _render_loop() -> void:
 		_check_court_celebration()
 		_refresh_hud()
 	is_rendering = false
+	# _can_interact() is false while a render is in flight, so the pass above
+	# always hides the action buttons. Refresh once more now that the table is
+	# idle, otherwise buttons like "Reveal Trump" only appear on the next
+	# unrelated UI event (which is why one had to tap a card to see it).
+	_refresh_hud()
 
 func _apply_snapshot(target: Dictionary) -> void:
 	var previous := state
@@ -434,10 +464,14 @@ func _apply_snapshot(target: Dictionary) -> void:
 	await _animate_trick_capture(previous, target)
 	await _animate_hidden_trump_set_aside(previous, target)
 	await _animate_plays(target)
-	await _animate_deal(target)
-	await _reveal_my_hand(target)
+	# The trump must fly back to its owner's hand BEFORE the deal step runs.
+	# Otherwise _animate_deal sees a card in the hand it has not drawn yet and
+	# deals a duplicate out of the deck, which is the stray card that used to
+	# come flying from the middle of the table.
 	await _animate_trump_reveal(previous, target)
 	await _animate_hidden_trump_return(previous, target)
+	await _animate_deal(target)
+	await _reveal_my_hand(target)
 
 	_sync_opponent_stacks(target)
 	_update_seat_counts(target)
@@ -483,6 +517,7 @@ func _sync_meta(target: Dictionary) -> void:
 	trump_active = bool(target.get("trump_active", false))
 	trump_suit = str(target.get("trump_suit", ""))
 	lead_suit = str(target.get("current_lead_suit", ""))
+	must_play_trump = bool(target.get("must_play_trump", false))
 	trump_holder_abs_seat_id = str(target.get("trump_holder_seat_id", trump_holder_abs_seat_id))
 	trump_holder_view = str(target.get("hidden_trump_holder_seat", trump_holder_view))
 	dealer_view = str(target.get("dealer_seat", dealer_view))
@@ -586,6 +621,10 @@ func _animate_deal(target: Dictionary) -> void:
 			var present := {}
 			for card in cards:
 				present[str(card.card_id)] = true
+			# The set-aside trump lives in its own slot, not in the hand, so it
+			# must never be dealt a second time out of the deck.
+			if hidden_trump_node != null and is_instance_valid(hidden_trump_node):
+				present[str(hidden_trump_node.card_id)] = true
 			for card_state_raw in target_hand:
 				var card_state: Dictionary = card_state_raw
 				var cid := str(card_state.get("card_id", ""))
@@ -821,12 +860,7 @@ func _add_pile_bundle(team: String, stack_index: int, tens: Array) -> void:
 		var ten_card := _new_card(ten, true, pile_pos)
 		ten_card.played = true
 		existing.append(ten_card)
-		var target_pos := _pile_marker(team).position + Vector3(
-			-0.55 + index * TEN_SPACING,
-			0.05 + index * 0.002,
-			-0.72
-		)
-		_tween_card(ten_card, target_pos, CARD_FLAT_ROT, 0.28, index * 0.06)
+		_tween_card(ten_card, _pile_ten_position(team, index), CARD_FLAT_ROT, 0.28, index * 0.06)
 	pile_ten_nodes[team] = existing
 
 func _animate_hidden_trump_set_aside(previous: Dictionary, target: Dictionary) -> void:
@@ -987,7 +1021,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 			(pile_bundles[team] as Array).append(bundle)
 		var tens: Array = captured_tens.get(team, [])
 		for i in range(tens.size()):
-			var ten_card := _new_card(tens[i], true, _pile_marker(team).position + Vector3(-0.55 + i * TEN_SPACING, 0.05 + i * 0.002, -0.72))
+			var ten_card := _new_card(tens[i], true, _pile_ten_position(team, i))
 			ten_card.played = true
 			(pile_ten_nodes[team] as Array).append(ten_card)
 
@@ -1009,7 +1043,10 @@ func _on_card_clicked(card: Node3D) -> void:
 		if not my_turn:
 			return
 		if not _is_legal_play(card):
-			_set_phase_message("You must follow %s" % lead_suit.capitalize())
+			if _owes_trump():
+				_set_phase_message("You opened the trump - you must play a %s" % trump_suit.capitalize())
+			else:
+				_set_phase_message("You must follow %s" % lead_suit.capitalize())
 			return
 	else:
 		return
@@ -1026,12 +1063,18 @@ func _on_card_clicked(card: Node3D) -> void:
 	card.set_selected(true)
 	_refresh_buttons()
 
+func _owes_trump() -> bool:
+	# Set by the server on the player who opened the hidden trump: they must
+	# play a trump this turn if they hold one.
+	return must_play_trump and trump_active and trump_suit != "" and _my_hand_has_suit(trump_suit)
+
 func _is_legal_play(card: Node3D) -> bool:
+	if _owes_trump():
+		return str(card.suit).to_lower() == trump_suit.to_lower()
 	if lead_suit == "":
 		return true
-	for c in _hand("my"):
-		if str(c.suit).to_lower() == lead_suit.to_lower():
-			return str(card.suit).to_lower() == lead_suit.to_lower()
+	if _my_hand_has_suit(lead_suit):
+		return str(card.suit).to_lower() == lead_suit.to_lower()
 	return true
 
 func _trump_holder_view() -> String:
@@ -1206,7 +1249,7 @@ func _hud_label(text: String, font_size: int, color: Color, align: int = HORIZON
 
 func _score_cell(key: String, text: String, font_size: int, color: Color) -> Label:
 	var label := _hud_label(text, font_size, color, HORIZONTAL_ALIGNMENT_CENTER)
-	label.custom_minimum_size = Vector2(58, 0)
+	label.custom_minimum_size = Vector2(52, 0)
 	hud_values[key] = label
 	return label
 
@@ -1234,6 +1277,36 @@ func _build_status_ui() -> void:
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	score_panel.add_child(column)
 
+	# Trump sits at the top of the match panel rather than alone in a screen
+	# corner: everything you need to read is then in one place.
+	var trump_row := HBoxContainer.new()
+	trump_row.add_theme_constant_override("separation", 8)
+	trump_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(trump_row)
+
+	var trump_caption := _hud_label("TRUMP", 12, COL_MUTED)
+	trump_caption.custom_minimum_size = Vector2(56, 0)
+	trump_row.add_child(trump_caption)
+
+	# The icon and label live in the scene; move them into the row so their
+	# layout is container-driven instead of anchored to the corner.
+	trump_suit_icon.get_parent().remove_child(trump_suit_icon)
+	trump_suit_icon.custom_minimum_size = Vector2(22, 22)
+	trump_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	trump_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	trump_row.add_child(trump_suit_icon)
+
+	trump_label.get_parent().remove_child(trump_label)
+	trump_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	trump_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	trump_label.add_theme_font_size_override("font_size", 16)
+	trump_label.add_theme_color_override("font_color", COL_GOLD)
+	trump_row.add_child(trump_label)
+
+	var trump_rule := HSeparator.new()
+	trump_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(trump_rule)
+
 	var target_label := _hud_label("RACE TO 15", 12, COL_MUTED)
 	hud_values["target"] = target_label
 	column.add_child(target_label)
@@ -1246,21 +1319,21 @@ func _build_status_ui() -> void:
 	column.add_child(grid)
 
 	var name_header := _hud_label("", 11, COL_MUTED)
-	name_header.custom_minimum_size = Vector2(104, 0)
+	name_header.custom_minimum_size = Vector2(96, 0)
 	grid.add_child(name_header)
 	grid.add_child(_hud_label("SCORE", 11, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
 	grid.add_child(_hud_label("10s", 11, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
 	grid.add_child(_hud_label("TRICKS", 11, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
 
 	var you_name := _hud_label("YOUR TEAM", 14, COL_YOU)
-	you_name.custom_minimum_size = Vector2(104, 0)
+	you_name.custom_minimum_size = Vector2(96, 0)
 	grid.add_child(you_name)
 	grid.add_child(_score_cell("you_score", "0", 22, COL_TEXT))
 	grid.add_child(_score_cell("you_tens", "0 / 4", 16, COL_GOLD))
 	grid.add_child(_score_cell("you_tricks", "0", 16, COL_MUTED))
 
 	var them_name := _hud_label("OPPONENTS", 14, COL_THEM)
-	them_name.custom_minimum_size = Vector2(104, 0)
+	them_name.custom_minimum_size = Vector2(96, 0)
 	grid.add_child(them_name)
 	grid.add_child(_score_cell("them_score", "0", 22, COL_TEXT))
 	grid.add_child(_score_cell("them_tens", "0 / 4", 16, COL_GOLD))
@@ -1291,32 +1364,6 @@ func _build_status_ui() -> void:
 	hud_values["turn"] = turn_value
 	footer.add_child(turn_value)
 
-	# Result chip, centred at the top, shown only between games.
-	result_panel = PanelContainer.new()
-	result_panel.name = "ResultChip"
-	var result_style := StyleBoxFlat.new()
-	result_style.bg_color = Color(0.04, 0.09, 0.06, 0.9)
-	result_style.set_corner_radius_all(12)
-	result_style.content_margin_left = 20
-	result_style.content_margin_right = 20
-	result_style.content_margin_top = 8
-	result_style.content_margin_bottom = 8
-	result_panel.add_theme_stylebox_override("panel", result_style)
-	result_panel.anchor_left = 0.5
-	result_panel.anchor_right = 0.5
-	result_panel.offset_left = -240.0
-	result_panel.offset_right = 240.0
-	result_panel.offset_top = 12.0
-	result_panel.offset_bottom = 52.0
-	result_panel.visible = false
-	result_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hud.add_child(result_panel)
-
-	result_label = _hud_label("", 18, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER)
-	result_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
-	result_label.add_theme_constant_override("outline_size", 4)
-	result_panel.add_child(result_label)
-
 	leave_button = Button.new()
 	leave_button.text = "Leave"
 	leave_button.anchor_left = 1.0
@@ -1333,9 +1380,9 @@ func _ensure_nameplates() -> void:
 		if view_name == "my" or nameplates.has(view_name):
 			continue
 		var plate := Label.new()
-		plate.size = Vector2(180, 24)
+		plate.size = NAMEPLATE_SIZE
 		plate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		plate.add_theme_font_size_override("font_size", 15)
+		plate.add_theme_font_size_override("font_size", 14)
 		plate.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 		plate.add_theme_constant_override("outline_size", 5)
 		plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1375,8 +1422,7 @@ func _update_nameplates() -> void:
 			text += "  [offline]"
 		plate.text = text
 
-		var anchor := _seat_anchor_position(view_name).lerp(_trick_slot_position(view_name), 0.32)
-		plate.position = camera.unproject_position(_to_world(anchor)) - plate.size * 0.5
+		plate.position = camera.unproject_position(_to_world(_nameplate_anchor(view_name))) - plate.size * 0.5
 		plate.add_theme_color_override("font_color", Color(1.0, 0.84, 0.4) if view_name == turn_view else Color(0.92, 0.96, 0.93))
 
 func _refresh_hud() -> void:
@@ -1451,30 +1497,6 @@ func _refresh_scoreboard() -> void:
 	var turn_view := _current_turn_view()
 	_set_hud_value("dealer", _display_name(dealer_view), COL_TEXT)
 	_set_hud_value("turn", _display_name(turn_view), COL_GOLD if turn_view == "my" else COL_TEXT)
-
-	if result_panel == null or result_label == null:
-		return
-	var result: Dictionary = state.get("last_game_result", {})
-	if result.is_empty():
-		result_panel.visible = false
-		result_label.text = ""
-		return
-
-	result_panel.visible = true
-	if bool(result.get("draw", false)):
-		result_label.text = "Draw — no points"
-		result_label.add_theme_color_override("font_color", COL_MUTED)
-		return
-
-	var winner := str(result.get("winner", ""))
-	var won := winner == my_team
-	var who := "Your team" if won else "Opponents"
-	if bool(result.get("court", false)):
-		result_label.text = "★  COURT  ★   %s took all four 10s  (+%d)" % [who, int(result.get("points", 0))]
-		result_label.add_theme_color_override("font_color", COL_GOLD if won else COL_THEM)
-	else:
-		result_label.text = "%s won this game  (+%d)" % [who, int(result.get("points", 0))]
-		result_label.add_theme_color_override("font_color", COL_YOU if won else COL_THEM)
 
 func _refresh_trump_label() -> void:
 	trump_label.text = "Trump: " + (trump_suit.capitalize() if (trump_active and trump_suit != "") else "None")
@@ -1624,9 +1646,10 @@ func _spawn_confetti(layer: Control, count: int) -> void:
 		var spin := piece.create_tween()
 		spin.tween_property(piece, "rotation", randf_range(-9.0, 9.0), 2.4)
 
-func _set_phase_message(text: String) -> void:
+func _set_phase_message(text: String, color: Color = COL_GOLD) -> void:
 	phase_message_panel.visible = true
 	phase_message_label.text = text
+	phase_message_label.add_theme_color_override("font_color", color)
 
 func _clear_phase_message() -> void:
 	phase_message_panel.visible = false
@@ -1658,21 +1681,25 @@ func _refresh_phase_message() -> void:
 				_set_phase_message("Draw! No points. Next deal starting...")
 			else:
 				var winner := str(result.get("winner", ""))
-				var who := "Your team" if winner == my_team else "Opponents"
+				var won := winner == my_team
+				var who := "Your team" if won else "Opponents"
 				var points := int(result.get("points", 0))
 				if bool(result.get("court", false)):
 					var tail := " The game ended right there." if bool(result.get("ended_early", false)) else ""
+					var court_color := COL_GOLD if won else COL_THEM
 					if phase == "match_result":
-						_set_phase_message("COURT! %s took all four 10s (+%d) and won the match!" % [who, points])
+						_set_phase_message("COURT! %s took all four 10s (+%d) and won the match!" % [who, points], court_color)
 					else:
-						_set_phase_message("COURT! %s took all four 10s (+%d).%s Next deal starting..." % [who, points, tail])
+						_set_phase_message("COURT! %s took all four 10s (+%d).%s Next deal starting..." % [who, points, tail], court_color)
 				elif phase == "match_result":
-					_set_phase_message("%s won the match! (+%d)" % [who, points])
+					_set_phase_message("%s won the match! (+%d)" % [who, points], COL_YOU if won else COL_THEM)
 				else:
-					_set_phase_message("%s won this game (+%d). Next deal starting..." % [who, points])
+					_set_phase_message("%s won this game (+%d). Next deal starting..." % [who, points], COL_YOU if won else COL_THEM)
 		"playing":
 			if bool(state.get("revealing_trump", false)):
 				_set_phase_message("Trump revealed: %s" % trump_suit.capitalize())
+			elif my_turn and not table_busy and _owes_trump():
+				_set_phase_message("You opened the trump - play a %s" % trump_suit.capitalize())
 			elif my_turn and not table_busy:
 				_set_phase_message("Your turn")
 			else:
