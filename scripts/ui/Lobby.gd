@@ -2,13 +2,23 @@ extends Control
 
 @onready var room_code_label: Label = %RoomCodeLabel
 @onready var copy_code_button: Button = %CopyCodeButton
-@onready var player_list: VBoxContainer = %PlayerList
+@onready var team_a_header: Label = %TeamAHeader
+@onready var team_b_header: Label = %TeamBHeader
+@onready var team_a_list: VBoxContainer = %TeamAList
+@onready var team_b_list: VBoxContainer = %TeamBList
+@onready var join_team_a_button: Button = %JoinTeamAButton
+@onready var join_team_b_button: Button = %JoinTeamBButton
 @onready var hint_label: Label = %HintLabel
 @onready var ready_button: Button = %ReadyButton
 @onready var start_game_button: Button = %StartGameButton
 @onready var leave_button: Button = %LeaveButton
 
+const TEAM_A_COLOR := Color(0.463, 0.831, 0.6)
+const TEAM_B_COLOR := Color(0.949, 0.706, 0.435)
+const MUTED_COLOR := Color(0.604, 0.702, 0.647)
+
 var players: Array = []
+var settings: Dictionary = {}
 var is_ready: bool = false
 
 func _ready() -> void:
@@ -16,6 +26,8 @@ func _ready() -> void:
 	start_game_button.pressed.connect(_on_start_game_pressed)
 	leave_button.pressed.connect(_on_leave_pressed)
 	copy_code_button.pressed.connect(_on_copy_code_pressed)
+	join_team_a_button.pressed.connect(func(): _on_join_team_pressed("A"))
+	join_team_b_button.pressed.connect(func(): _on_join_team_pressed("B"))
 
 	room_code_label.text = NetworkManager.current_room_code
 
@@ -27,6 +39,7 @@ func _ready() -> void:
 
 	if NetworkManager.current_lobby_players.size() > 0:
 		players = NetworkManager.current_lobby_players.duplicate(true)
+	settings = NetworkManager.current_room_settings.duplicate(true)
 	_refresh_players()
 
 func _on_copy_code_pressed() -> void:
@@ -36,33 +49,92 @@ func _on_copy_code_pressed() -> void:
 	if is_instance_valid(copy_code_button):
 		copy_code_button.text = "Copy Code"
 
-func _refresh_players() -> void:
-	for child in player_list.get_children():
+func _player_count() -> int:
+	var count := int(settings.get("player_count", 4))
+	if count == 4 or count == 6 or count == 8:
+		return count
+	return 4
+
+func _team_capacity() -> int:
+	return int(_player_count() / 2)
+
+func _team_of(player: Dictionary) -> String:
+	# Teams follow the seat the server handed out; the team choice only decides
+	# which seat that is.
+	var seat_id := str(player.get("seat_id", ""))
+	if not seat_id.begins_with("seat_"):
+		return ""
+	return "A" if int(seat_id.trim_prefix("seat_")) % 2 == 0 else "B"
+
+func _local_team() -> String:
+	for p_raw in players:
+		var p: Dictionary = p_raw
+		if str(p.get("id", "")) == NetworkManager.local_player_id:
+			return _team_of(p)
+	return ""
+
+func _members_of(team: String) -> Array:
+	var out: Array = []
+	for p_raw in players:
+		var p: Dictionary = p_raw
+		if _team_of(p) == team:
+			out.append(p)
+	return out
+
+func _fill_team_column(list: VBoxContainer, team: String, color: Color) -> void:
+	for child in list.get_children():
 		child.queue_free()
 
-	if players.is_empty():
-		var empty_label := Label.new()
-		empty_label.text = "Waiting for players..."
-		empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		player_list.add_child(empty_label)
-	else:
-		for i in range(players.size()):
-			var p: Dictionary = players[i]
-			var line := "%d.  %s" % [i + 1, str(p.get("name", "Player"))]
-			if i == 0:
-				line += "  (host)"
-			if bool(p.get("ready", false)):
-				line += "  ✓"
-			if not bool(p.get("is_connected", true)):
-				line += "  [offline]"
+	var members := _members_of(team)
+	var host_id := "" if players.is_empty() else str((players[0] as Dictionary).get("id", ""))
 
-			var row := Label.new()
-			row.text = line
-			row.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			player_list.add_child(row)
+	for p_raw in members:
+		var p: Dictionary = p_raw
+		var line := str(p.get("name", "Player"))
+		if str(p.get("id", "")) == NetworkManager.local_player_id:
+			line = "► " + line
+		if str(p.get("id", "")) == host_id:
+			line += "  ★"
+		if bool(p.get("ready", false)):
+			line += "  ✓"
+		if not bool(p.get("is_connected", true)):
+			line += "  (offline)"
+
+		var row := Label.new()
+		row.text = line
+		row.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		row.add_theme_font_size_override("font_size", 14)
+		row.add_theme_color_override("font_color", color)
+		list.add_child(row)
+
+	# Empty seats read as "Bot" so the table composition is obvious up front.
+	for _i in range(_team_capacity() - members.size()):
+		var slot := Label.new()
+		slot.text = "Bot"
+		slot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		slot.add_theme_font_size_override("font_size", 14)
+		slot.add_theme_color_override("font_color", MUTED_COLOR)
+		list.add_child(slot)
+
+func _refresh_players() -> void:
+	_fill_team_column(team_a_list, "A", TEAM_A_COLOR)
+	_fill_team_column(team_b_list, "B", TEAM_B_COLOR)
+
+	var capacity := _team_capacity()
+	team_a_header.text = "TEAM A   %d/%d" % [_members_of("A").size(), capacity]
+	team_b_header.text = "TEAM B   %d/%d" % [_members_of("B").size(), capacity]
+
+	var my_team := _local_team()
+	join_team_a_button.text = "You're in A" if my_team == "A" else "Join A"
+	join_team_b_button.text = "You're in B" if my_team == "B" else "Join B"
+	join_team_a_button.disabled = my_team == "A" or _members_of("A").size() >= capacity
+	join_team_b_button.disabled = my_team == "B" or _members_of("B").size() >= capacity
 
 	start_game_button.visible = _is_local_host()
 	hint_label.visible = not _is_local_host() or players.size() < 2
+
+func _on_join_team_pressed(team: String) -> void:
+	NetworkManager.send_team_choice(team)
 
 func _is_local_host() -> bool:
 	if players.is_empty():
@@ -90,8 +162,10 @@ func _on_leave_pressed() -> void:
 func _on_server_disconnected() -> void:
 	get_tree().change_scene_to_file("res://scenes/ui/Home.tscn")
 
-func _on_lobby_updated(updated_players: Array) -> void:
+func _on_lobby_updated(updated_players: Array, updated_settings: Dictionary = {}) -> void:
 	players = updated_players.duplicate(true)
+	if not updated_settings.is_empty():
+		settings = updated_settings.duplicate(true)
 	_refresh_players()
 
 func _mark_local_players(match_players: Array) -> Array:

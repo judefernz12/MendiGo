@@ -297,6 +297,82 @@ func _run() -> void:
 	var server_tens: int = int(st()["captured_10s"]["A"]) + int(st()["captured_10s"]["B"])
 	ok(shown_tens == server_tens, "captured 10s are displayed on the piles")
 
+	# --- the scoreboard reads back the state that is drawn -------------------
+	var drawn: Dictionary = room_ui.state
+	var my_team: String = str(room_ui.my_team)
+	var other_team := "B" if my_team == "A" else "A"
+	var drawn_tens: Dictionary = drawn.get("captured_10s", {"A": 0, "B": 0})
+	var my_tricks: int = int(drawn.get("team_a_trick_count", 0) if my_team == "A" else drawn.get("team_b_trick_count", 0))
+	var their_tricks: int = int(drawn.get("team_b_trick_count", 0) if my_team == "A" else drawn.get("team_a_trick_count", 0))
+
+	ok(room_ui.hud_values.has("you_score") and room_ui.hud_values.has("them_tens"), "the scoreboard is built from labelled cells")
+	ok(str(room_ui.hud_values["you_tricks"].text) == str(my_tricks), "the scoreboard shows my team's tricks")
+	ok(str(room_ui.hud_values["them_tricks"].text) == str(their_tricks), "the scoreboard shows the opponents' tricks")
+	ok(str(room_ui.hud_values["you_tens"].text) == "%d / 4" % int(drawn_tens.get(my_team, 0)), "my 10s are shown against the court target")
+	ok(str(room_ui.hud_values["them_tens"].text) == "%d / 4" % int(drawn_tens.get(other_team, 0)), "opponent 10s are shown against the court target")
+	ok(str(room_ui.hud_values["target"].text) == "RACE TO %d" % int(drawn.get("target_score", 15)), "the scoreboard shows the target score")
+	ok(str(room_ui.hud_values["dealer"].text) == room_ui._display_name(room_ui.dealer_view), "the scoreboard names the dealer")
+
+	# --- winning a court is celebrated ---------------------------------------
+	var court_snapshot: Dictionary = server._build_client_snapshot(srv_room(), human_seat)
+	var court_state: Dictionary = court_snapshot["game_state"]
+	court_state["phase"] = "game_result"
+	court_state["last_game_result"] = {
+		"winner": my_team, "court": true, "points": 5,
+		"draw": false, "ended_early": true,
+		"captured_10s": {my_team: 4, other_team: 0},
+		"captured_tricks": {"A": 3, "B": 2}
+	}
+	court_snapshot["game_state"] = court_state
+
+	# Start from a clean slate: a single trick above could legitimately have
+	# swept all four 10s and fired the celebration already.
+	if room_ui.celebration_layer != null and is_instance_valid(room_ui.celebration_layer):
+		room_ui.celebration_layer.queue_free()
+	room_ui.celebration_layer = null
+	room_ui.court_celebrated = false
+	await process_frame
+	ok(room_ui.celebration_layer == null, "the celebration overlay starts cleared")
+
+	room_ui._on_snapshot_received(court_snapshot)
+	await settle()
+	await process_frame
+
+	ok(room_ui.celebration_layer != null and is_instance_valid(room_ui.celebration_layer), "a court raises a celebration overlay")
+	if room_ui.celebration_layer == null:
+		_report()
+		return
+
+	ok(room_ui.celebration_layer.find_child("CourtBanner", true, false) != null, "the celebration shows a court banner")
+	var confetti := 0
+	for child in room_ui.celebration_layer.get_children():
+		if child is ColorRect and (child as ColorRect).color.a > 0.9:
+			confetti += 1
+	ok(confetti > 0, "winning a court throws confetti")
+	ok(room_ui.result_panel.visible, "the result chip is shown once the game is decided")
+	ok(str(room_ui.result_label.text).contains("COURT"), "the result chip calls out the court")
+	ok(str(room_ui.phase_message_label.text).contains("COURT"), "the banner message calls out the court")
+
+	# The same result resent must not stack a second overlay.
+	var layer_id: int = room_ui.celebration_layer.get_instance_id()
+	room_ui._on_snapshot_received(court_snapshot)
+	await settle()
+	ok(room_ui.celebration_layer.get_instance_id() == layer_id, "a resent result does not restack the celebration")
+
+	# A fresh game clears the result and re-arms the celebration.
+	var reset_snapshot: Dictionary = court_snapshot.duplicate(true)
+	var reset_state: Dictionary = reset_snapshot["game_state"]
+	reset_state["last_game_result"] = {}
+	reset_state["phase"] = "playing"
+	reset_snapshot["game_state"] = reset_state
+	room_ui._on_snapshot_received(reset_snapshot)
+	await settle()
+	ok(not room_ui.court_celebrated, "a new game re-arms the celebration")
+	ok(not room_ui.result_panel.visible, "the result chip is hidden again during play")
+
+	_report()
+
+func _report() -> void:
 	print("")
 	print("CHECKS RUN: ", checks)
 	if fails.is_empty():

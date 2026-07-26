@@ -42,6 +42,17 @@ const TEN_SPACING := 0.2
 
 const TURN_TIME_LIMIT := 20.0
 
+# HUD palette. Kept here so the scoreboard, nameplates and the court
+# celebration all speak the same colour language.
+const COL_TEXT := Color(0.92, 0.95, 0.93)
+const COL_MUTED := Color(0.60, 0.70, 0.65)
+const COL_YOU := Color(0.46, 0.83, 0.60)
+const COL_THEM := Color(0.95, 0.55, 0.45)
+const COL_GOLD := Color(0.95, 0.83, 0.44)
+
+const TENS_IN_DECK := 4
+const COURT_CELEBRATION_TIME := 3.4
+
 # Opponent cards are face down and carry no information, so the table shows a
 # small tight bunch instead of a wide fan. The real hand size still lives on
 # the server; this only limits how many card backs are drawn.
@@ -119,9 +130,14 @@ var timer_fade_tween: Tween = null
 var trump_icon_tween: Tween = null
 
 var nameplates: Dictionary = {}
-var scoreboard_label: Label = null
+var hud_values: Dictionary = {}      # scoreboard cell name -> Label
+var score_panel: PanelContainer = null
+var result_panel: PanelContainer = null
 var result_label: Label = null
 var leave_button: Button = null
+
+var court_celebrated: bool = false
+var celebration_layer: Control = null
 
 # =========================================================================
 # setup
@@ -386,6 +402,7 @@ func _render_loop() -> void:
 			is_rendering = false
 			return
 		state = target
+		_check_court_celebration()
 		_refresh_hud()
 	is_rendering = false
 
@@ -1177,41 +1194,128 @@ func _show_trump_mode_choice() -> void:
 # HUD
 # =========================================================================
 
+func _hud_label(text: String, font_size: int, color: Color, align: int = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	label.horizontal_alignment = align
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return label
+
+func _score_cell(key: String, text: String, font_size: int, color: Color) -> Label:
+	var label := _hud_label(text, font_size, color, HORIZONTAL_ALIGNMENT_CENTER)
+	label.custom_minimum_size = Vector2(58, 0)
+	hud_values[key] = label
+	return label
+
 func _build_status_ui() -> void:
-	var score_panel := PanelContainer.new()
+	# One readable scoreboard instead of a wall of text: a header, a row per
+	# team with its own columns, then who deals and who is on turn.
+	score_panel = PanelContainer.new()
 	score_panel.name = "ScorePanel"
 	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.04, 0.09, 0.06, 0.82)
-	panel_style.set_corner_radius_all(10)
-	panel_style.content_margin_left = 14
-	panel_style.content_margin_right = 14
-	panel_style.content_margin_top = 8
-	panel_style.content_margin_bottom = 8
+	panel_style.bg_color = Color(0.04, 0.09, 0.06, 0.88)
+	panel_style.border_color = Color(0.18, 0.29, 0.23, 0.9)
+	panel_style.set_border_width_all(1)
+	panel_style.set_corner_radius_all(14)
+	panel_style.content_margin_left = 16
+	panel_style.content_margin_right = 16
+	panel_style.content_margin_top = 12
+	panel_style.content_margin_bottom = 12
 	score_panel.add_theme_stylebox_override("panel", panel_style)
 	score_panel.position = Vector2(14, 12)
 	score_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(score_panel)
 
-	scoreboard_label = Label.new()
-	scoreboard_label.add_theme_font_size_override("font_size", 15)
-	scoreboard_label.add_theme_color_override("font_color", Color(0.9, 0.96, 0.91))
-	scoreboard_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	score_panel.add_child(scoreboard_label)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	score_panel.add_child(column)
 
-	result_label = Label.new()
-	result_label.anchor_left = 0.5
-	result_label.anchor_right = 0.5
-	result_label.offset_left = -260.0
-	result_label.offset_right = 260.0
-	result_label.offset_top = 14.0
-	result_label.offset_bottom = 42.0
-	result_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	result_label.add_theme_font_size_override("font_size", 18)
-	result_label.add_theme_color_override("font_color", Color(1, 0.9, 0.45, 1))
+	var target_label := _hud_label("RACE TO 15", 12, COL_MUTED)
+	hud_values["target"] = target_label
+	column.add_child(target_label)
+
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 2)
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(grid)
+
+	var name_header := _hud_label("", 11, COL_MUTED)
+	name_header.custom_minimum_size = Vector2(104, 0)
+	grid.add_child(name_header)
+	grid.add_child(_hud_label("SCORE", 11, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
+	grid.add_child(_hud_label("10s", 11, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+	grid.add_child(_hud_label("TRICKS", 11, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
+
+	var you_name := _hud_label("YOUR TEAM", 14, COL_YOU)
+	you_name.custom_minimum_size = Vector2(104, 0)
+	grid.add_child(you_name)
+	grid.add_child(_score_cell("you_score", "0", 22, COL_TEXT))
+	grid.add_child(_score_cell("you_tens", "0 / 4", 16, COL_GOLD))
+	grid.add_child(_score_cell("you_tricks", "0", 16, COL_MUTED))
+
+	var them_name := _hud_label("OPPONENTS", 14, COL_THEM)
+	them_name.custom_minimum_size = Vector2(104, 0)
+	grid.add_child(them_name)
+	grid.add_child(_score_cell("them_score", "0", 22, COL_TEXT))
+	grid.add_child(_score_cell("them_tens", "0 / 4", 16, COL_GOLD))
+	grid.add_child(_score_cell("them_tricks", "0", 16, COL_MUTED))
+
+	var rule := HSeparator.new()
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(rule)
+
+	var footer := GridContainer.new()
+	footer.columns = 2
+	footer.add_theme_constant_override("h_separation", 10)
+	footer.add_theme_constant_override("v_separation", 1)
+	footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(footer)
+
+	var dealer_caption := _hud_label("Dealer", 12, COL_MUTED)
+	dealer_caption.custom_minimum_size = Vector2(56, 0)
+	footer.add_child(dealer_caption)
+	var dealer_value := _hud_label("-", 13, COL_TEXT)
+	hud_values["dealer"] = dealer_value
+	footer.add_child(dealer_value)
+
+	var turn_caption := _hud_label("Turn", 12, COL_MUTED)
+	turn_caption.custom_minimum_size = Vector2(56, 0)
+	footer.add_child(turn_caption)
+	var turn_value := _hud_label("-", 13, COL_TEXT)
+	hud_values["turn"] = turn_value
+	footer.add_child(turn_value)
+
+	# Result chip, centred at the top, shown only between games.
+	result_panel = PanelContainer.new()
+	result_panel.name = "ResultChip"
+	var result_style := StyleBoxFlat.new()
+	result_style.bg_color = Color(0.04, 0.09, 0.06, 0.9)
+	result_style.set_corner_radius_all(12)
+	result_style.content_margin_left = 20
+	result_style.content_margin_right = 20
+	result_style.content_margin_top = 8
+	result_style.content_margin_bottom = 8
+	result_panel.add_theme_stylebox_override("panel", result_style)
+	result_panel.anchor_left = 0.5
+	result_panel.anchor_right = 0.5
+	result_panel.offset_left = -240.0
+	result_panel.offset_right = 240.0
+	result_panel.offset_top = 12.0
+	result_panel.offset_bottom = 52.0
+	result_panel.visible = false
+	result_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(result_panel)
+
+	result_label = _hud_label("", 18, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER)
 	result_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
 	result_label.add_theme_constant_override("outline_size", 4)
-	result_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hud.add_child(result_label)
+	result_panel.add_child(result_label)
 
 	leave_button = Button.new()
 	leave_button.text = "Leave"
@@ -1314,38 +1418,63 @@ func _my_hand_has_suit(suit: String) -> bool:
 			return true
 	return false
 
-func _refresh_scoreboard() -> void:
-	if scoreboard_label == null:
+func _set_hud_value(key: String, text: String, color: Color = COL_TEXT) -> void:
+	var label: Label = hud_values.get(key, null)
+	if label == null or not is_instance_valid(label):
 		return
+	label.text = text
+	label.add_theme_color_override("font_color", color)
+
+func _refresh_scoreboard() -> void:
+	if hud_values.is_empty():
+		return
+
 	var scores: Dictionary = state.get("scores", {"A": 0, "B": 0})
 	var tens: Dictionary = state.get("captured_10s", {"A": 0, "B": 0})
-	var target_score := int(state.get("target_score", 15))
 	var other_team := "B" if my_team == "A" else "A"
+	var my_tricks := int(state.get("team_a_trick_count", 0) if my_team == "A" else state.get("team_b_trick_count", 0))
+	var their_tricks := int(state.get("team_b_trick_count", 0) if my_team == "A" else state.get("team_a_trick_count", 0))
+	var my_tens := int(tens.get(my_team, 0))
+	var their_tens := int(tens.get(other_team, 0))
 
-	scoreboard_label.text = "Your team %s  •  Opponents %s   (to %d)\n10s  %s - %s      Tricks  %s - %s\nDealer: %s      Turn: %s\nTrump: %s" % [
-		str(scores.get(my_team, 0)),
-		str(scores.get(other_team, 0)),
-		target_score,
-		str(tens.get(my_team, 0)),
-		str(tens.get(other_team, 0)),
-		str(state.get("team_a_trick_count", 0) if my_team == "A" else state.get("team_b_trick_count", 0)),
-		str(state.get("team_b_trick_count", 0) if my_team == "A" else state.get("team_a_trick_count", 0)),
-		_display_name(dealer_view),
-		_display_name(_current_turn_view()),
-		trump_suit.capitalize() if (trump_active and trump_suit != "") else "None"
-	]
+	_set_hud_value("target", "RACE TO %d" % int(state.get("target_score", 15)), COL_MUTED)
+	_set_hud_value("you_score", str(scores.get(my_team, 0)), COL_TEXT)
+	_set_hud_value("them_score", str(scores.get(other_team, 0)), COL_TEXT)
+	_set_hud_value("you_tricks", str(my_tricks), COL_MUTED)
+	_set_hud_value("them_tricks", str(their_tricks), COL_MUTED)
 
-	if result_label == null:
+	# The 10s decide the game, so they are shown against the court target and
+	# flare up as a team closes in on all four.
+	_set_hud_value("you_tens", "%d / %d" % [my_tens, TENS_IN_DECK], COL_GOLD if my_tens >= TENS_IN_DECK - 1 else COL_TEXT)
+	_set_hud_value("them_tens", "%d / %d" % [their_tens, TENS_IN_DECK], COL_GOLD if their_tens >= TENS_IN_DECK - 1 else COL_TEXT)
+
+	var turn_view := _current_turn_view()
+	_set_hud_value("dealer", _display_name(dealer_view), COL_TEXT)
+	_set_hud_value("turn", _display_name(turn_view), COL_GOLD if turn_view == "my" else COL_TEXT)
+
+	if result_panel == null or result_label == null:
 		return
 	var result: Dictionary = state.get("last_game_result", {})
 	if result.is_empty():
+		result_panel.visible = false
 		result_label.text = ""
-	elif bool(result.get("draw", false)):
-		result_label.text = "Draw - no points"
+		return
+
+	result_panel.visible = true
+	if bool(result.get("draw", false)):
+		result_label.text = "Draw — no points"
+		result_label.add_theme_color_override("font_color", COL_MUTED)
+		return
+
+	var winner := str(result.get("winner", ""))
+	var won := winner == my_team
+	var who := "Your team" if won else "Opponents"
+	if bool(result.get("court", false)):
+		result_label.text = "★  COURT  ★   %s took all four 10s  (+%d)" % [who, int(result.get("points", 0))]
+		result_label.add_theme_color_override("font_color", COL_GOLD if won else COL_THEM)
 	else:
-		var winner := str(result.get("winner", ""))
-		var label := "Your team" if winner == my_team else "Opponents"
-		result_label.text = "%s won %s (+%d)" % [label, "Court" if bool(result.get("court", false)) else "Normal", int(result.get("points", 0))]
+		result_label.text = "%s won this game  (+%d)" % [who, int(result.get("points", 0))]
+		result_label.add_theme_color_override("font_color", COL_YOU if won else COL_THEM)
 
 func _refresh_trump_label() -> void:
 	trump_label.text = "Trump: " + (trump_suit.capitalize() if (trump_active and trump_suit != "") else "None")
@@ -1372,6 +1501,128 @@ func _animate_trump_icon_in() -> void:
 	trump_icon_tween.parallel().tween_property(trump_suit_icon, "modulate:a", 1.0, 0.2)
 	trump_icon_tween.parallel().tween_property(trump_suit_icon, "scale", Vector2(1.12, 1.12), 0.2)
 	trump_icon_tween.tween_property(trump_suit_icon, "scale", Vector2.ONE, 0.12)
+
+# =========================================================================
+# court celebration
+# =========================================================================
+
+func _check_court_celebration() -> void:
+	# last_game_result is cleared when a new game is created, so an empty
+	# result is the signal to arm the celebration for the next court.
+	var result: Dictionary = state.get("last_game_result", {})
+	if result.is_empty():
+		court_celebrated = false
+		return
+	if not bool(result.get("court", false)) or court_celebrated:
+		return
+	court_celebrated = true
+	_celebrate_court(result)
+
+func _celebrate_court(result: Dictionary) -> void:
+	if celebration_layer != null and is_instance_valid(celebration_layer):
+		celebration_layer.queue_free()
+
+	var won := str(result.get("winner", "")) == my_team
+
+	var layer := Control.new()
+	layer.name = "CourtCelebration"
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(layer)
+	celebration_layer = layer
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.name = "CourtBanner"
+	box.add_theme_constant_override("separation", 2)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(box)
+
+	var headline := _hud_label("COURT!" if won else "COURT AGAINST YOU", 76 if won else 52, COL_GOLD if won else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
+	headline.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
+	headline.add_theme_constant_override("outline_size", 12)
+	box.add_child(headline)
+
+	var who := "You swept all four 10s" if won else "The opponents swept all four 10s"
+	var subtitle := _hud_label(who, 22, COL_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	subtitle.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
+	subtitle.add_theme_constant_override("outline_size", 6)
+	box.add_child(subtitle)
+
+	var points := _hud_label("+%d POINTS" % int(result.get("points", 5)), 28, COL_GOLD if won else COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	points.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
+	points.add_theme_constant_override("outline_size", 8)
+	box.add_child(points)
+
+	if bool(result.get("ended_early", false)):
+		box.add_child(_hud_label("Game ended early — the court is decided", 16, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
+
+	if won:
+		_spawn_confetti(layer, 46)
+
+	# The banner has no size until the container has laid it out, so the pop
+	# has to wait one frame for a correct pivot.
+	await get_tree().process_frame
+	if not is_inside_tree() or not is_instance_valid(box):
+		return
+	box.pivot_offset = box.size * 0.5
+	box.scale = Vector2(0.45, 0.45)
+	var pop := box.create_tween()
+	pop.set_trans(Tween.TRANS_BACK)
+	pop.set_ease(Tween.EASE_OUT)
+	pop.tween_property(box, "scale", Vector2(1.06, 1.06), 0.35)
+	pop.set_trans(Tween.TRANS_SINE)
+	pop.tween_property(box, "scale", Vector2.ONE, 0.15)
+
+	var life := layer.create_tween()
+	life.tween_property(dim, "color:a", 0.5, 0.25)
+	life.tween_interval(COURT_CELEBRATION_TIME)
+	life.tween_property(layer, "modulate:a", 0.0, 0.5)
+	life.tween_callback(func():
+		if is_instance_valid(layer):
+			layer.queue_free()
+		celebration_layer = null
+	)
+
+func _spawn_confetti(layer: Control, count: int) -> void:
+	var view_size := layer.get_viewport_rect().size
+	if view_size.x <= 0.0 or view_size.y <= 0.0:
+		return
+	var palette := [COL_GOLD, COL_YOU, COL_THEM, Color(0.55, 0.72, 0.96), Color(1, 1, 1)]
+	var origin := Vector2(view_size.x * 0.5, view_size.y * 0.44)
+
+	for i in range(count):
+		var piece := ColorRect.new()
+		piece.color = palette[i % palette.size()]
+		piece.size = Vector2(randf_range(6.0, 12.0), randf_range(10.0, 18.0))
+		piece.pivot_offset = piece.size * 0.5
+		piece.position = origin
+		piece.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		layer.add_child(piece)
+
+		var angle := randf_range(0.0, TAU)
+		var burst := origin + Vector2(cos(angle), sin(angle)) * randf_range(140.0, view_size.x * 0.42)
+		var fall := Vector2(burst.x + randf_range(-70.0, 70.0), view_size.y + 80.0)
+
+		var flight := piece.create_tween()
+		flight.set_trans(Tween.TRANS_QUAD)
+		flight.set_ease(Tween.EASE_OUT)
+		flight.tween_property(piece, "position", burst, 0.4)
+		flight.set_ease(Tween.EASE_IN)
+		flight.tween_property(piece, "position", fall, randf_range(1.2, 2.0))
+
+		var spin := piece.create_tween()
+		spin.tween_property(piece, "rotation", randf_range(-9.0, 9.0), 2.4)
 
 func _set_phase_message(text: String) -> void:
 	phase_message_panel.visible = true
@@ -1408,11 +1659,17 @@ func _refresh_phase_message() -> void:
 			else:
 				var winner := str(result.get("winner", ""))
 				var who := "Your team" if winner == my_team else "Opponents"
-				var kind := "Court" if bool(result.get("court", false)) else "Normal"
-				if phase == "match_result":
-					_set_phase_message("%s won the match! (%s, +%d)" % [who, kind, int(result.get("points", 0))])
+				var points := int(result.get("points", 0))
+				if bool(result.get("court", false)):
+					var tail := " The game ended right there." if bool(result.get("ended_early", false)) else ""
+					if phase == "match_result":
+						_set_phase_message("COURT! %s took all four 10s (+%d) and won the match!" % [who, points])
+					else:
+						_set_phase_message("COURT! %s took all four 10s (+%d).%s Next deal starting..." % [who, points, tail])
+				elif phase == "match_result":
+					_set_phase_message("%s won the match! (+%d)" % [who, points])
 				else:
-					_set_phase_message("%s won this game (%s, +%d). Next deal starting..." % [who, kind, int(result.get("points", 0))])
+					_set_phase_message("%s won this game (+%d). Next deal starting..." % [who, points])
 		"playing":
 			if bool(state.get("revealing_trump", false)):
 				_set_phase_message("Trump revealed: %s" % trump_suit.capitalize())

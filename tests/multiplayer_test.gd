@@ -188,7 +188,38 @@ func _run() -> void:
 	# --- the two humans sit on opposite teams with bot partners ---
 	ok(str(client_a.my_team) != str(client_b.my_team) or seat_a == seat_b, "each client resolves its own team")
 
+	await partner_room_check()
+
 	_report()
+
+func partner_room_check() -> void:
+	# Two humans who both pick the same side must end up as partners, and the
+	# bots must take the other side.
+	server.rooms.erase(code)
+	server._server_create_room({"id": "pair_a", "name": "Ann"}, {
+		"player_count": 4, "target_score": 15,
+		"play_direction": "counter_clockwise", "bots_enabled": true
+	}, 5)
+	var pair_code := ""
+	for key in server.rooms.keys():
+		pair_code = str(key)
+	server._server_join_room(pair_code, {"id": "pair_b", "name": "Ben"}, false, 6)
+	server._server_set_team(pair_code, "pair_b", "A", 6)
+	server._server_start_match(pair_code, "pair_a", 5)
+	await process_frame
+
+	var teams := {}
+	var bot_teams := {"A": 0, "B": 0}
+	for p in server.rooms[pair_code].get("players", []):
+		var team: String = server._team_for_seat(str(p.get("seat_id", "")))
+		if bool(p.get("is_bot", false)):
+			bot_teams[team] = int(bot_teams[team]) + 1
+		else:
+			teams[str(p.get("id", ""))] = team
+	ok(str(teams.get("pair_a", "")) == "A" and str(teams.get("pair_b", "")) == "A", "two humans who pick the same side become partners")
+	ok(int(bot_teams["B"]) == 2 and int(bot_teams["A"]) == 0, "the bots take the other side")
+
+	server.rooms.erase(pair_code)
 
 func _report() -> void:
 	print("")

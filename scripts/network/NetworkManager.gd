@@ -3,7 +3,7 @@ extends Node
 signal connected_to_server
 signal connection_failed
 signal disconnected_from_server
-signal lobby_updated(players)
+signal lobby_updated(players, settings)
 signal room_created(room_code)
 signal room_joined(room_code)
 signal start_match(match_setup)
@@ -31,6 +31,7 @@ var current_room_code: String = ""
 var local_player_name: String = ""
 var local_player_id: String = ""
 var current_lobby_players: Array = []
+var current_room_settings: Dictionary = {}
 var latest_game_state_snapshot: Dictionary = {}
 
 # Handed from the lobby to the game scene. Kept in memory on purpose: two
@@ -121,6 +122,14 @@ func send_ready_state(is_ready: bool) -> void:
 
 	rpc_id(1, "_server_set_ready", current_room_code, local_player_id, is_ready)
 
+func send_team_choice(team: String) -> void:
+	if multiplayer.multiplayer_peer == null or current_room_code == "":
+		return
+	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+
+	rpc_id(1, "_server_set_team", current_room_code, local_player_id, team)
+
 func request_start_match() -> void:
 	if multiplayer.multiplayer_peer == null or current_room_code == "":
 		return
@@ -195,9 +204,10 @@ func _client_room_joined(room_code: String) -> void:
 	emit_signal("room_joined", room_code)
 
 @rpc("authority")
-func _client_lobby_updated(players: Array) -> void:
+func _client_lobby_updated(players: Array, settings: Dictionary = {}) -> void:
 	current_lobby_players = players.duplicate(true)
-	emit_signal("lobby_updated", current_lobby_players)
+	current_room_settings = settings.duplicate(true)
+	emit_signal("lobby_updated", current_lobby_players, current_room_settings)
 
 @rpc("authority")
 func _client_start_match(match_setup: Dictionary) -> void:
@@ -239,6 +249,12 @@ func _server_set_ready(code: String, player_id: String, is_ready: bool) -> void:
 	var server := get_node_or_null("/root/root")
 	if server != null and server.has_method("_server_set_ready"):
 		server._server_set_ready(code, player_id, is_ready, multiplayer.get_remote_sender_id())
+
+@rpc("any_peer")
+func _server_set_team(code: String, player_id: String, team: String) -> void:
+	var server := get_node_or_null("/root/root")
+	if server != null and server.has_method("_server_set_team"):
+		server._server_set_team(code, player_id, team, multiplayer.get_remote_sender_id())
 
 @rpc("any_peer")
 func _server_start_match(code: String, player_id: String) -> void:

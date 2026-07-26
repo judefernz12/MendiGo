@@ -17,6 +17,12 @@ const TRUMP_REVEAL_HOLD_S := 3.0
 const BOT_CHOICE_DELAY_S := 2.5
 const DEALER_REVEAL_HOLD_S := 3.0
 const DEAL_ANIMATION_HOLD_S := 2.5
+# A court gets a longer hold so clients can play the celebration.
+const COURT_RESULT_DELAY_S := 12.0
+
+# Every deck (52 or 48 cards) contains exactly four 10s. Once one team holds
+# all of them the court is locked in and nothing later can change the result.
+const TENS_IN_DECK := 4
 
 var rooms: Dictionary = {}
 var peer_to_room: Dictionary = {}
@@ -96,7 +102,8 @@ func _normalize_player(player: Dictionary, peer_id: int) -> Dictionary:
 		"ready": false,
 		"is_bot": false,
 		"is_connected": true,
-		"seat_id": ""
+		"seat_id": "",
+		"team_choice": ""
 	}
 
 func _normalize_room_settings(raw_settings: Dictionary) -> Dictionary:
@@ -121,10 +128,80 @@ func _normalize_room_settings(raw_settings: Dictionary) -> Dictionary:
 		"spectators_enabled": bool(raw_settings.get("spectators_enabled", true))
 	}
 
-func _assign_seats(players: Array) -> Array:
+func _team_for_seat_index(seat_index: int) -> String:
+	return "A" if seat_index % 2 == 0 else "B"
+
+func _team_capacity(player_count: int) -> int:
+	# Teams alternate around the table, so each side owns half the seats.
+	return int(player_count / 2)
+
+func _team_choice_count(players: Array, team: String, skip_player_id: String = "") -> int:
+	var count := 0
+	for p_raw in players:
+		var p: Dictionary = p_raw
+		if str(p.get("id", "")) == skip_player_id:
+			continue
+		if str(p.get("team_choice", "")) == team:
+			count += 1
+	return count
+
+func _assign_seats(players: Array, player_count: int = -1) -> Array:
+	# Teams are still alternating seats (GameRules.txt), so honouring a team
+	# choice means handing that player a seat of the matching parity. Players
+	# who picked nothing fill whatever is left, in join order, which reproduces
+	# the old behaviour exactly when nobody has chosen.
+	var seats := player_count
+	if seats <= 0:
+		seats = players.size()
+	seats = maxi(seats, players.size())
+
+	var seat_owner := {}    # seat index -> player index
+	var player_seat := {}   # player index -> seat index
+
 	for i in range(players.size()):
 		var p: Dictionary = players[i]
-		p["seat_id"] = "seat_%d" % i
+		var choice := str(p.get("team_choice", ""))
+		if choice != "A" and choice != "B":
+			continue
+		for s in range(seats):
+			if seat_owner.has(s):
+				continue
+			if _team_for_seat_index(s) != choice:
+				continue
+			seat_owner[s] = i
+			player_seat[i] = s
+			break
+
+	for i in range(players.size()):
+		if player_seat.has(i):
+			continue
+		for s in range(seats):
+			if seat_owner.has(s):
+				continue
+			seat_owner[s] = i
+			player_seat[i] = s
+			break
+
+	for i in range(players.size()):
+		var p: Dictionary = players[i]
+		p["seat_id"] = "seat_%d" % int(player_seat.get(i, i))
+		players[i] = p
+	return players
+
+func _lock_team_choices(players: Array) -> Array:
+	# A human who never touched the team picker still owns the side they were
+	# seated on, so record it. Without this, the next player to pick a team
+	# could silently push them across the table.
+	for i in range(players.size()):
+		var p: Dictionary = players[i]
+		if bool(p.get("is_bot", false)):
+			continue
+		if str(p.get("team_choice", "")) != "":
+			continue
+		var seat_id := str(p.get("seat_id", ""))
+		if not seat_id.begins_with("seat_"):
+			continue
+		p["team_choice"] = _team_for_seat_index(int(seat_id.trim_prefix("seat_")))
 		players[i] = p
 	return players
 
@@ -159,14 +236,18 @@ func _broadcast_lobby(code: String) -> void:
 	if not rooms.has(code):
 		return
 
-	var players: Array = rooms[code].get("players", [])
+	var room: Dictionary = rooms[code]
+	var players: Array = room.get("players", [])
+	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
 	for p_raw in players:
 		var p: Dictionary = p_raw
 		if bool(p.get("is_bot", false)):
 			continue
-		_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_lobby_updated", players)
+		_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_lobby_updated", players, settings)
 
 func _fill_bots(players: Array, player_count: int) -> Array:
+	# Bots are appended last and never pick a team, so they take whatever seats
+	# the humans left over - which keeps both sides full.
 	var filled := players.duplicate(true)
 	while filled.size() < player_count:
 		var bot_index := filled.size() + 1
@@ -177,9 +258,10 @@ func _fill_bots(players: Array, player_count: int) -> Array:
 			"ready": true,
 			"is_bot": true,
 			"is_connected": true,
-			"seat_id": ""
+			"seat_id": "",
+			"team_choice": ""
 		})
-	return _assign_seats(filled)
+	return _assign_seats(filled, player_count)
 
 func _create_dealer_draw_cards(player_count: int) -> Array:
 	var ranks := RANKS_HIGH_TO_LOW.duplicate()
@@ -695,12 +777,18 @@ func _finish_trick_if_needed(state: Dictionary) -> Dictionary:
 			any_cards_left = true
 			break
 
-	if not any_cards_left:
-		state = _finish_game(state)
+	# A team that has taken all four 10s has already won the court, so the rest
+	# of the hand cannot change anything: end the game here instead of making
+	# everyone play out dead tricks. Hands are left untouched so clients can
+	# clear the table with the usual next-game animation.
+	var court_secured := int(state["captured_10s"].get(team, 0)) >= TENS_IN_DECK
+
+	if not any_cards_left or court_secured:
+		state = _finish_game(state, court_secured and any_cards_left)
 
 	return state
 
-func _finish_game(state: Dictionary) -> Dictionary:
+func _finish_game(state: Dictionary, ended_early: bool = false) -> Dictionary:
 	var tens_a := int(state["captured_10s"].get("A", 0))
 	var tens_b := int(state["captured_10s"].get("B", 0))
 	var tricks_a := int(state["captured_tricks"].get("A", 0))
@@ -727,6 +815,7 @@ func _finish_game(state: Dictionary) -> Dictionary:
 			"court": false,
 			"points": 0,
 			"draw": true,
+			"ended_early": false,
 			"captured_10s": state["captured_10s"].duplicate(true),
 			"captured_tricks": state["captured_tricks"].duplicate(true)
 		}
@@ -740,6 +829,7 @@ func _finish_game(state: Dictionary) -> Dictionary:
 		"court": court,
 		"points": points,
 		"draw": false,
+		"ended_early": ended_early,
 		"captured_10s": state["captured_10s"].duplicate(true),
 		"captured_tricks": state["captured_tricks"].duplicate(true)
 	}
@@ -814,10 +904,11 @@ func _maybe_schedule_next_game(code: String) -> void:
 		return
 	room["next_game_scheduled"] = true
 	rooms[code] = room
-	_start_next_game_after_delay(code)
+	var court := bool((state.get("last_game_result", {}) as Dictionary).get("court", false))
+	_start_next_game_after_delay(code, COURT_RESULT_DELAY_S if court else NEXT_GAME_DELAY_S)
 
-func _start_next_game_after_delay(code: String) -> void:
-	await get_tree().create_timer(NEXT_GAME_DELAY_S).timeout
+func _start_next_game_after_delay(code: String, delay: float = NEXT_GAME_DELAY_S) -> void:
+	await get_tree().create_timer(delay).timeout
 	if not rooms.has(code):
 		return
 	var room: Dictionary = rooms[code]
@@ -1265,7 +1356,7 @@ func _server_create_room(player: Dictionary, room_settings: Dictionary = {}, sen
 	rooms[code] = {
 		"code": code,
 		"settings": settings,
-		"players": _assign_seats(players),
+		"players": _lock_team_choices(_assign_seats(players, int(settings.get("player_count", 4)))),
 		"spectators": [],
 		"phase": "lobby",
 		"dealer_draw_cards": [],
@@ -1317,7 +1408,7 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		room["spectators"] = spectators
 	else:
 		players.append(_normalize_player(player, peer_id))
-		room["players"] = _assign_seats(players)
+		room["players"] = _lock_team_choices(_assign_seats(players, int(settings.get("player_count", 4))))
 
 	rooms[code] = room
 	peer_to_room[peer_id] = code
@@ -1341,6 +1432,41 @@ func _server_set_ready(code: String, player_id: String, is_ready: bool, sender_p
 	p["ready"] = is_ready
 	players[index] = p
 	room["players"] = players
+	rooms[code] = room
+	_broadcast_lobby(code)
+
+@rpc("any_peer")
+func _server_set_team(code: String, player_id: String, team: String, sender_peer_id: int = 0) -> void:
+	if not rooms.has(code):
+		return
+
+	var room: Dictionary = rooms[code]
+	# Seats are locked once the match has started.
+	if str(room.get("phase", "lobby")) != "lobby":
+		return
+
+	var players: Array = room.get("players", [])
+	var index := _find_player_index(players, player_id)
+	if index == -1:
+		return
+
+	var p: Dictionary = players[index]
+	if not _is_sender_for_player(p, sender_peer_id):
+		return
+
+	if team != "A" and team != "B":
+		return
+
+	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
+	var player_count := int(settings.get("player_count", 4))
+	# A full side cannot take another player; the request is simply ignored so
+	# the client keeps the seat it already had.
+	if _team_choice_count(players, team, player_id) >= _team_capacity(player_count):
+		return
+
+	p["team_choice"] = team
+	players[index] = p
+	room["players"] = _assign_seats(players, player_count)
 	rooms[code] = room
 	_broadcast_lobby(code)
 

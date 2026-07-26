@@ -41,7 +41,7 @@ theme_override_constants/margin_right = 36
 theme_override_constants/margin_bottom = 26
 
 [node name="VBox" type="VBoxContainer" parent="CenterContainer/Card/Margin"]
-custom_minimum_size = Vector2(400, 0)
+custom_minimum_size = Vector2(440, 0)
 layout_mode = 2
 theme_override_constants/separation = 10
 
@@ -79,19 +79,90 @@ layout_mode = 2
 [node name="PlayersHeader" type="Label" parent="CenterContainer/Card/Margin/VBox"]
 layout_mode = 2
 theme_type_variation = &"SubtitleLabel"
-text = "PLAYERS"
+text = "PICK YOUR TEAM"
 horizontal_alignment = 1
 
-[node name="PlayerList" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+[node name="TeamsRow" type="HBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="TeamACard" type="PanelContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/separation = 4
+size_flags_horizontal = 3
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamACard"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamACard/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="TeamAHeader" type="Label" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamACard/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.463, 0.831, 0.6, 1)
+theme_override_font_sizes/font_size = 15
+text = "TEAM A"
+horizontal_alignment = 1
+
+[node name="TeamAList" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamACard/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 74)
+layout_mode = 2
+theme_override_constants/separation = 3
+
+[node name="JoinTeamAButton" type="Button" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamACard/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+text = "Join A"
+
+[node name="TeamBCard" type="PanelContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Margin" type="MarginContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamBCard"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamBCard/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="TeamBHeader" type="Label" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamBCard/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.949, 0.706, 0.435, 1)
+theme_override_font_sizes/font_size = 15
+text = "TEAM B"
+horizontal_alignment = 1
+
+[node name="TeamBList" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamBCard/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 74)
+layout_mode = 2
+theme_override_constants/separation = 3
+
+[node name="JoinTeamBButton" type="Button" parent="CenterContainer/Card/Margin/VBox/TeamsRow/TeamBCard/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 38)
+layout_mode = 2
+text = "Join B"
 
 [node name="HintLabel" type="Label" parent="CenterContainer/Card/Margin/VBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"SubtitleLabel"
-text = "Empty seats are filled with bots when the host starts."
+text = "Pick a side before the host starts. Empty seats are filled with bots."
 horizontal_alignment = 1
 autowrap_mode = 2
 

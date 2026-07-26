@@ -25,6 +25,17 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Trick capture with the captured 10s recorded per team (tested)
 - Court = 5 points, normal = 2, equal 10s decided by tricks, equal both = draw
   with no points (tested)
+- A court ends the game as soon as the fourth 10 is captured rather than
+  playing out dead tricks; the unplayed cards stay in hand so the table can be
+  cleared with the normal next-game animation, and the result carries an
+  `ended_early` flag (tested). This is a deliberate refinement of the
+  "a game ends when all cards have been played" line in `GameRules.txt`: once
+  one team holds all four 10s the court is mathematically locked in
+- Teams still follow alternating seats, but players may pick a side in the
+  lobby. The choice is stored per player and resolved into a seat of that
+  side's parity; a player who never picked is pinned to the side they were
+  seated on so nobody else's choice can move them; a full side is refused;
+  bots fill whatever is left (tested)
 - Match ends at the target score; otherwise the next game starts automatically
 - Dealer rotation: dealer's team wins -> pass the deal on; loses normal ->
   same dealer; loses court -> skip one seat (tested)
@@ -56,6 +67,19 @@ a delta cannot be reconciled.
   re-animated
 - Trump icon pop-in, turn timer ring, per-seat nameplates with turn highlight
 - Manual hand sorting survives later deals (new cards append, no re-order)
+- Court celebration: a full-screen banner pops in with the points won, plus
+  confetti when it is your team. The result chip and the phase banner both call
+  the court out. Losing a court shows the same banner in a colder style with no
+  confetti. The server holds the result for 12 s instead of 8 s so the
+  celebration can finish (tested)
+
+## HUD
+
+The top-left scoreboard is a labelled grid rather than a block of text: a row
+per team with score, 10s (shown as `n / 4` against the court target, which
+highlights as a team closes in) and tricks, then the dealer and whose turn it
+is. Trump stays on the top right with its suit icon. The result chip only
+appears between games (tested).
 
 ## Still needs manual testing in the editor
 

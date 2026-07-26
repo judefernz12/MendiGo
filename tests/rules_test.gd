@@ -59,6 +59,10 @@ func _run() -> void:
 	deal_unit_check(4, 13, 5, [5, 4, 4])
 	deal_unit_check(6, 8, 4, [4, 4])
 	deal_unit_check(8, 6, 3, [3, 3])
+	print("=== team selection ===")
+	team_choice_check()
+	print("=== court ends the game immediately ===")
+	court_early_end_check()
 	print("=== 4-player full match ===")
 	await play_match(4)
 
@@ -279,13 +283,23 @@ func play_match(player_count: int) -> void:
 	if s.is_empty():
 		return
 
+	var res: Dictionary = s["last_game_result"]
 	var total_tricks := int(s["captured_tricks"]["A"]) + int(s["captured_tricks"]["B"])
-	ok(total_tricks == cards_each, "all 13 tricks are accounted for")
 	var total_tens := int(s["captured_10s"]["A"]) + int(s["captured_10s"]["B"])
+	if bool(res.get("ended_early", false)):
+		# A court stops the game as soon as the fourth 10 lands, so the
+		# remaining tricks are never played.
+		ok(total_tricks < cards_each, "a court stops the game before the last trick")
+		ok(bool(res.get("court", false)), "only a court can end the game early")
+		var cards_left := 0
+		for seat in s["hands"].keys():
+			cards_left += (s["hands"][seat] as Array).size()
+		ok(cards_left > 0, "the early finish leaves the unplayed cards in hand")
+	else:
+		ok(total_tricks == cards_each, "all 13 tricks are accounted for")
 	ok(total_tens == 4, "all four 10s are captured")
 	ok(tricks_seen > 0, "trick capture events were published to clients")
 
-	var res: Dictionary = s["last_game_result"]
 	var tens_a := int(s["captured_10s"]["A"])
 	var tens_b := int(s["captured_10s"]["B"])
 	if tens_a == 4 or tens_b == 4:
@@ -362,6 +376,152 @@ func verify_trick_winner(lt: Dictionary, _s: Dictionary) -> void:
 	var expected_team: String = server._team_for_seat(expected_seat)
 	ok(str(lt["winner_seat_id"]) == expected_seat, "trick winner is correct")
 	ok(str(lt["team"]) == expected_team, "trick goes to the winner's team")
+
+func seat_of(room_code: String, player_id: String) -> String:
+	for p in server.rooms.get(room_code, {}).get("players", []):
+		if str(p.get("id", "")) == player_id:
+			return str(p.get("seat_id", ""))
+	return ""
+
+func team_of(room_code: String, player_id: String) -> String:
+	var seat := seat_of(room_code, player_id)
+	if seat == "":
+		return ""
+	return server._team_for_seat(seat)
+
+func team_choice_check() -> void:
+	server.rooms.clear()
+	server._server_create_room({"id": "p1", "name": "Alice"}, {
+		"player_count": 4, "target_score": 15, "bots_enabled": true
+	}, 2)
+	var c := str(server.rooms.keys()[0])
+	server._server_join_room(c, {"id": "p2", "name": "Bob"}, false, 3)
+
+	ok(team_of(c, "p1") == "A" and team_of(c, "p2") == "B", "without a choice players still alternate seats")
+
+	# A third player joins, then picks a side. Nobody who did not touch the
+	# picker may be shuffled across the table by that choice.
+	server._server_join_room(c, {"id": "p3", "name": "Cara"}, false, 4)
+	var p1_before := team_of(c, "p1")
+	var p2_before := team_of(c, "p2")
+	server._server_set_team(c, "p3", "B", 4)
+	ok(team_of(c, "p3") == "B", "picking a team moves the player onto that team's seats")
+	ok(team_of(c, "p1") == p1_before, "the host is not moved by someone else's choice")
+	ok(team_of(c, "p2") == p2_before, "a player who never picked is not moved by someone else's choice")
+	var distinct := {}
+	for p in server.rooms[c].get("players", []):
+		distinct[str(p.get("seat_id", ""))] = true
+	ok(distinct.size() == server.rooms[c].get("players", []).size(), "two players never share a seat")
+
+	# Team B is now full for a 4-player room, so p1 cannot join it.
+	var before := seat_of(c, "p1")
+	server._server_set_team(c, "p1", "B", 2)
+	ok(team_of(c, "p1") == "A", "a full team refuses another player")
+	ok(seat_of(c, "p1") == before, "a refused team choice does not move the player")
+
+	# Cara goes back to A, which frees a B seat for p1.
+	server._server_set_team(c, "p3", "A", 4)
+	ok(team_of(c, "p3") == "A", "a player can switch back")
+	server._server_set_team(c, "p1", "B", 2)
+	ok(team_of(c, "p1") == "B", "the seat freed by a switch becomes available")
+
+	# Someone else's peer may not move a player.
+	var cara_seat := seat_of(c, "p3")
+	server._server_set_team(c, "p3", "B", 2)
+	ok(seat_of(c, "p3") == cara_seat, "a team choice from the wrong peer is rejected")
+
+	# Bots fill the remaining seats and the human choices survive the fill.
+	var p1_team := team_of(c, "p1")
+	var p3_team := team_of(c, "p3")
+	server._server_start_match(c, "p1", 2)
+	ok(team_of(c, "p1") == p1_team and team_of(c, "p3") == p3_team, "bot fill keeps the chosen teams")
+	var seats := {}
+	for p in server.rooms[c].get("players", []):
+		seats[str(p.get("seat_id", ""))] = true
+	ok(seats.size() == 4, "every seat is filled exactly once after the bot fill")
+	ok(server.rooms[c].get("players", []).size() == 4, "the bot fill reaches the room size")
+
+	# Seats are locked once the match has started.
+	var locked_seat := seat_of(c, "p1")
+	server._server_set_team(c, "p1", "B", 2)
+	ok(seat_of(c, "p1") == locked_seat, "team choices are refused once the match has started")
+
+	server.rooms.clear()
+
+func court_state(tens_a: int, empty_hands: bool) -> Dictionary:
+	var fake_room := {
+		"code": "COURT",
+		"settings": server._normalize_room_settings({"player_count": 4}),
+		"players": server._fill_bots([], 4),
+		"dealer_seat_id": "seat_0",
+		"trump_holder_seat_id": "seat_1"
+	}
+	var s: Dictionary = server._create_match_state(fake_room)
+	s = server._deal_remaining_cards(s)
+	s["phase"] = "playing"
+	if empty_hands:
+		for seat in s["hands"].keys():
+			s["hands"][seat] = []
+	s["captured_10s"] = {"A": tens_a, "B": 0}
+	s["captured_tricks"] = {"A": 3, "B": 0}
+	s["lead_suit"] = "hearts"
+	# seat_0 (team A) leads and wins with the ace; the 10 of hearts goes with it.
+	s["trick_cards"] = [
+		{"seat_id": "seat_0", "card_id": "t_a", "id": 90, "suit": "hearts", "rank": "ace"},
+		{"seat_id": "seat_1", "card_id": "t_b", "id": 91, "suit": "hearts", "rank": "10"},
+		{"seat_id": "seat_2", "card_id": "t_c", "id": 92, "suit": "hearts", "rank": "4"},
+		{"seat_id": "seat_3", "card_id": "t_d", "id": 93, "suit": "hearts", "rank": "5"}
+	]
+	return s
+
+func cards_in_hands(s: Dictionary) -> int:
+	var total := 0
+	for h in s.get("hands", {}).values():
+		total += (h as Array).size()
+	return total
+
+func court_early_end_check() -> void:
+	# Three 10s already banked: this trick brings the fourth and must end the
+	# game on the spot, even though every seat still holds cards.
+	var s := court_state(3, false)
+	ok(cards_in_hands(s) > 0, "the court check starts with cards still in hand")
+	var out: Dictionary = server._finish_trick_if_needed(s)
+
+	ok(int(out["captured_10s"]["A"]) == 4, "the fourth 10 is credited to the winning team")
+	ok(str(out["phase"]) == "game_result", "the game ends the moment a team holds all four 10s")
+	var res: Dictionary = out["last_game_result"]
+	ok(bool(res.get("court", false)), "the result is a court")
+	ok(int(res.get("points", 0)) == 5, "a court scores 5")
+	ok(bool(res.get("ended_early", false)), "the result is flagged as an early finish")
+	ok(int(out["scores"]["A"]) == 5, "the court points are added to the score")
+	ok(cards_in_hands(out) > 0, "unplayed cards are left alone so clients can clear the table")
+
+	# No further play may be accepted once the court has ended the game.
+	server.rooms["COURT"] = {
+		"code": "COURT",
+		"settings": server._normalize_room_settings({"player_count": 4}),
+		"players": out["players"],
+		"match_state": out
+	}
+	var seat := str(out.get("current_turn_seat_id", "seat_0"))
+	var hand: Array = out["hands"][seat]
+	var size_before := hand.size()
+	server._apply_play_card_action("COURT", seat, str(hand[0]["card_id"]))
+	ok((server.rooms["COURT"]["match_state"]["hands"][seat] as Array).size() == size_before, "no card can be played after a court ends the game")
+	server.rooms.erase("COURT")
+
+	# Control: with only two 10s banked, the same trick must not end anything.
+	var s2 := court_state(1, false)
+	var out2: Dictionary = server._finish_trick_if_needed(s2)
+	ok(int(out2["captured_10s"]["A"]) == 2, "a trick with one 10 adds one 10")
+	ok(str(out2["phase"]) == "playing", "the game continues while the 10s are still split")
+	ok((out2["last_game_result"] as Dictionary).is_empty(), "no result is published mid-game")
+
+	# A court found on the very last trick is not an "early" finish.
+	var s3 := court_state(3, true)
+	var out3: Dictionary = server._finish_trick_if_needed(s3)
+	ok(str(out3["phase"]) == "game_result", "the game still ends when the last trick is played")
+	ok(not bool((out3["last_game_result"] as Dictionary).get("ended_early", true)), "a court on the final trick is not flagged early")
 
 func deal_unit_check(player_count: int, cards_each: int, first_batch: int, pattern: Array) -> void:
 	# Exercises the dealing rules directly, with no bot timing involved.
