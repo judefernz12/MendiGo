@@ -17,6 +17,8 @@ var human_id := "human_1"
 var human_seat := ""
 var fails: Array = []
 var checks := 0
+# A lambda captures locals by value, so the tap counter has to be a member.
+var tap_hits := 0
 
 func ok(cond: bool, label: String) -> void:
 	checks += 1
@@ -314,6 +316,7 @@ func _run() -> void:
 	ok(str(room_ui.hud_values["dealer"].text) == room_ui._display_name(room_ui.dealer_view), "the scoreboard names the dealer")
 
 	await lead_suit_chip_check()
+	await touch_input_check()
 
 	# --- winning a court is celebrated ---------------------------------------
 	var court_snapshot: Dictionary = server._build_client_snapshot(srv_room(), human_seat)
@@ -374,6 +377,61 @@ func _run() -> void:
 	await spectator_view_check(net)
 
 	_report()
+
+# --- one finger, one card --------------------------------------------------
+
+func touch_input_check() -> void:
+	# emulate_mouse_from_touch is on by default and this project does not turn
+	# it off, so a single tap reaches Area3D.input_event twice: once as a touch
+	# and once as an emulated mouse button. card_clicked toggles selection, so
+	# firing for both selected the card and deselected it again in the same
+	# frame - a card that cannot be picked up at all on a phone.
+	ok(bool(ProjectSettings.get_setting("input_devices/pointing/emulate_mouse_from_touch", true)),
+		"mouse events are emulated from touch (so Control buttons work on a phone)")
+	ok(bool(ProjectSettings.get_setting("physics/common/enable_object_picking", true)),
+		"3D picking is on (so cards can be tapped at all)")
+
+	var card: Node3D = room_ui.CARD_SCENE.instantiate()
+	room_ui.cards_node.add_child(card)
+	await process_frame
+	card.clickable = true
+
+	card.card_clicked.connect(func(_c): tap_hits += 1)
+
+	var touch := InputEventScreenTouch.new()
+	touch.index = 0
+	touch.pressed = true
+	var emulated := InputEventMouseButton.new()
+	emulated.button_index = MOUSE_BUTTON_LEFT
+	emulated.pressed = true
+
+	tap_hits = 0
+	card._on_tap_area_input_event(null, touch, Vector3.ZERO, Vector3.UP, 0)
+	card._on_tap_area_input_event(null, emulated, Vector3.ZERO, Vector3.UP, 0)
+	ok(tap_hits == 1, "one tap picks a card up exactly once (got %d)" % tap_hits)
+
+	# A mouse click on its own must still work, and so must a touch on its own.
+	tap_hits = 0
+	await process_frame
+	card._on_tap_area_input_event(null, emulated, Vector3.ZERO, Vector3.UP, 0)
+	ok(tap_hits == 1, "a plain mouse click still selects a card")
+
+	tap_hits = 0
+	await process_frame
+	card._on_tap_area_input_event(null, touch, Vector3.ZERO, Vector3.UP, 0)
+	ok(tap_hits == 1, "a plain touch still selects a card")
+
+	# Releasing must not count as another press.
+	var lift := InputEventScreenTouch.new()
+	lift.index = 0
+	lift.pressed = false
+	tap_hits = 0
+	await process_frame
+	card._on_tap_area_input_event(null, lift, Vector3.ZERO, Vector3.UP, 0)
+	ok(tap_hits == 0, "lifting a finger does not select anything")
+
+	card.queue_free()
+	await process_frame
 
 # --- the suit that is being followed ---------------------------------------
 

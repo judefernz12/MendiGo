@@ -38,23 +38,34 @@ func _ready() -> void:
 	back.visible = false
 	
 
+var _last_tap_frame: int = -1
+
 func _on_tap_area_input_event(camera, event, event_position, normal, shape_idx) -> void:
 	if not clickable:
 		return
 
-	# Desktop / Web mouse click
+	var pressed := false
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			emit_signal("card_clicked", self)
-			get_viewport().set_input_as_handled()
-			return
+		# Desktop / web mouse click
+		pressed = event.button_index == MOUSE_BUTTON_LEFT and event.pressed
+	elif event is InputEventScreenTouch:
+		# Android / mobile touch
+		pressed = event.pressed
+	if not pressed:
+		return
 
-	# Android / mobile touch
-	if event is InputEventScreenTouch:
-		if event.pressed:
-			emit_signal("card_clicked", self)
-			get_viewport().set_input_as_handled()
-			return
+	# One finger produces two events. Godot's emulate_mouse_from_touch is on by
+	# default and this project does not turn it off, so a tap arrives once as a
+	# touch and again as an emulated mouse button, both in the same picking
+	# pass. Emitting for both selected the card and immediately deselected it,
+	# which on a phone looks like a card that cannot be picked up at all.
+	var frame := Engine.get_process_frames()
+	if frame == _last_tap_frame:
+		return
+	_last_tap_frame = frame
+
+	emit_signal("card_clicked", self)
+	get_viewport().set_input_as_handled()
 
 
 
