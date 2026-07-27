@@ -12,13 +12,13 @@ const TURN_DEADLINE_S := 20.0
 const CHOICE_DEADLINE_S := 25.0
 const TRICK_RESOLVE_PAUSE_S := 1.6
 const BOT_PLAY_DELAY_S := 1.1
-const NEXT_GAME_DELAY_S := 8.0
+const NEXT_GAME_DELAY_S := 5.0
 const TRUMP_REVEAL_HOLD_S := 3.0
 const BOT_CHOICE_DELAY_S := 2.5
 const DEALER_REVEAL_HOLD_S := 3.0
 const DEAL_ANIMATION_HOLD_S := 2.5
 # A court gets a longer hold so clients can play the celebration.
-const COURT_RESULT_DELAY_S := 12.0
+const COURT_RESULT_DELAY_S := 9.0
 
 # Every deck (52 or 48 cards) contains exactly four 10s. Once one team holds
 # all of them the court is locked in and nothing later can change the result.
@@ -461,6 +461,16 @@ func _deal_order_views(state: Dictionary, mapping: Dictionary) -> Array:
 			views.append(view)
 	return views
 
+func _host_seat_id(room: Dictionary) -> String:
+	var host_peer := _get_room_host_peer(room)
+	if host_peer <= 0:
+		return ""
+	for p_raw in room.get("players", []):
+		var p: Dictionary = p_raw
+		if int(p.get("peer_id", -1)) == host_peer:
+			return str(p.get("seat_id", ""))
+	return ""
+
 func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Dictionary:
 	var state: Dictionary = room.get("match_state", {}).duplicate(true)
 	var player_count := int(state.get("player_count", room.get("settings", {}).get("player_count", 4)))
@@ -589,6 +599,11 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 		"captured_ten_cards": state.get("captured_ten_cards", {"A": [], "B": []}),
 		"scores": state.get("scores", {"A": 0, "B": 0}),
 		"last_game_result": state.get("last_game_result", {}),
+		# How long the client has before the next deal, so it can show an
+		# honest countdown instead of guessing.
+		"next_game_delay": COURT_RESULT_DELAY_S if bool((state.get("last_game_result", {}) as Dictionary).get("court", false)) else NEXT_GAME_DELAY_S,
+		"is_host": _host_seat_id(room) == target_seat_id,
+		"turn_time_limit": TURN_DEADLINE_S,
 		"hands": hands_by_view,
 		"trick_cards": trick_by_view
 	}
@@ -1633,6 +1648,32 @@ func _server_receive_game_action(code: String, player_id: String, action: Dictio
 			_apply_hidden_trump_choice(code, seat_id, str(action.get("card_id", "")))
 		"open_trump":
 			_apply_hidden_trump_reveal(code, seat_id)
+
+@rpc("any_peer")
+func _server_request_rematch(code: String, player_id: String, sender_peer_id: int = 0) -> void:
+	if not rooms.has(code):
+		return
+
+	var sender := sender_peer_id
+	if sender == 0:
+		sender = multiplayer.get_remote_sender_id()
+	var room: Dictionary = rooms[code]
+	if sender != _get_room_host_peer(room):
+		return
+
+	var state: Dictionary = room.get("match_state", {})
+	if str(state.get("phase", "")) != "match_result":
+		return
+	var player := _find_player_by_id(room.get("players", []), player_id)
+	if player.is_empty():
+		return
+
+	# Same table, same seats, scores back to zero. The deal passes on exactly
+	# as it would have between games.
+	state["scores"] = {"A": 0, "B": 0}
+	room["match_state"] = state
+	rooms[code] = room
+	_start_next_game(code)
 
 @rpc("any_peer")
 func _server_request_game_state(code: String, player_id: String, sender_peer_id: int = 0) -> void:

@@ -231,7 +231,194 @@ func _run() -> void:
 	ok(any_card != null and ui._is_legal_play(any_card), "with no trump in hand any card is playable")
 
 	await reveal_button_check()
+	await opponent_trump_return_check()
+	await table_signposting_check()
 	_report()
+
+func fresh_table() -> void:
+	if ui != null and is_instance_valid(ui):
+		ui.queue_free()
+		await process_frame
+	var packed: PackedScene = load("res://scenes/game/GameRoom3D.tscn")
+	ui = packed.instantiate()
+	root.add_child(ui)
+	await process_frame
+
+func opponent_trump_return_check() -> void:
+	# Same life cycle, but the trump belongs to the seat on the right. The
+	# renderer works out how many cards a seat was dealt by comparing hand
+	# sizes, so the card leaving and rejoining that hand has to be accounted
+	# for - otherwise a duplicate is dealt from the deck in the middle.
+	await fresh_table()
+
+	var opening := base_snapshot()
+	opening["hands"]["my"] = plain_cards()
+	opening["hands"]["right"] = hidden_hand("seat_1", 3)
+	opening["hidden_trump_holder_seat"] = "right"
+	opening["trump_holder_seat_id"] = "seat_1"
+	await push(opening)
+	ok(ui.hand_cards["right"].size() == 3, "the right seat starts with three cards")
+
+	var set_aside := base_snapshot()
+	set_aside["hands"]["my"] = plain_cards()
+	set_aside["hands"]["right"] = hidden_hand("seat_1", 2)
+	set_aside["hidden_trump_holder_seat"] = "right"
+	set_aside["trump_holder_seat_id"] = "seat_1"
+	var aside := redacted_trump()
+	aside["holder_seat"] = "right"
+	aside["holder_seat_id"] = "seat_1"
+	set_aside["hidden_trump"] = aside
+	await push(set_aside)
+
+	ok(ui.hidden_trump_node != null and is_instance_valid(ui.hidden_trump_node), "the opponent's trump moves to the slot")
+	if ui.hidden_trump_node == null:
+		return
+	var slot_id: int = ui.hidden_trump_node.get_instance_id()
+	ok(ui.hand_cards["right"].size() == 2, "the opponent's hand drops by one")
+
+	var returned := base_snapshot()
+	returned["hands"]["my"] = plain_cards()
+	returned["hands"]["right"] = hidden_hand("seat_1", 3)
+	returned["hidden_trump_holder_seat"] = "right"
+	returned["trump_holder_seat_id"] = "seat_1"
+	returned["trump_active"] = true
+	returned["trump_suit"] = "spades"
+	returned["hidden_trump_revealed"] = true
+	var back_home := trump_card()
+	back_home["holder_seat"] = "right"
+	back_home["holder_seat_id"] = "seat_1"
+	back_home["is_set_aside"] = false
+	back_home["is_revealed"] = true
+	back_home["has_returned_to_hand"] = true
+	returned["hidden_trump"] = back_home
+
+	# Watch the transition, not just the end state. A duplicate dealt from the
+	# deck is culled again by the opponent-stack cap once the dust settles, so
+	# by the time rendering finishes the counts look right - but the player has
+	# already watched the stray card fly in from the middle of the table.
+	var before_children: int = ui.cards_node.get_child_count()
+	var peak := before_children
+	ui._on_snapshot_received({"game_state": returned})
+	var watch_deadline := Time.get_ticks_msec() + 15000
+	while ui.is_rendering and Time.get_ticks_msec() < watch_deadline:
+		peak = maxi(peak, ui.cards_node.get_child_count())
+		await process_frame
+	await settle()
+	ok(peak <= before_children, "no extra card is created while the trump returns (peaked at %d cards, started with %d)" % [peak, before_children])
+
+	ok(ui.hidden_trump_node == null, "the slot empties when the opponent takes the card back")
+	ok(ui.hand_cards["right"].size() == 3, "the opponent's hand is back to three, with no duplicate")
+	var kept := false
+	for card in ui.hand_cards["right"]:
+		if card.get_instance_id() == slot_id:
+			kept = true
+	ok(kept, "the card the opponent takes back is the one from the slot")
+
+	var deck_position: Vector3 = ui.deck_point.position
+	var stragglers := 0
+	for view in ui.seat_order:
+		for card in ui.hand_cards[view]:
+			if card.position.distance_to(deck_position) < 0.4:
+				stragglers += 1
+	ok(stragglers == 0, "no second card is dealt out of the middle of the table (%d found)" % stragglers)
+
+func table_signposting_check() -> void:
+	# Team colours, the turn highlight, the per-seat timer, the between-games
+	# countdown and the end-of-match screen.
+	await fresh_table()
+
+	var snapshot := base_snapshot()
+	snapshot["hands"]["my"] = plain_cards()
+	snapshot["current_turn_index"] = 1
+	snapshot["is_host"] = true
+	await push(snapshot)
+	await process_frame
+	await process_frame
+
+	ok(str(ui.my_team) == "A", "the local player resolves its own team")
+	ok(ui._is_my_team("top"), "the seat opposite is on my team")
+	ok(not ui._is_my_team("right") and not ui._is_my_team("left"), "the seats either side are opponents")
+
+	var mine: StyleBoxFlat = ui.nameplate_styles["top"]
+	var theirs: StyleBoxFlat = ui.nameplate_styles["left"]
+	ok(mine.border_color.b > mine.border_color.r, "a teammate's plate is tinted towards blue")
+	ok(theirs.border_color.r > theirs.border_color.b, "an opponent's plate is tinted towards red")
+
+	# Whose turn it is has to be more than a colour change on the text.
+	var active: StyleBoxFlat = ui.nameplate_styles["right"]
+	ok(active.border_width_top > theirs.border_width_top, "the seat on turn gets a thicker ring")
+	ok(active.border_color.r > 0.8 and active.border_color.g > 0.6 and active.border_color.b < 0.6, "the seat on turn is ringed in gold")
+
+	# The countdown ring follows whoever is playing, not only the local seat.
+	ok(str(ui.timer_view) == "right", "the turn timer follows the seat on turn")
+	ok(ui.turn_timer_widget.visible, "the turn timer is shown for an opponent's turn")
+	var plate: Label = ui.nameplates["right"]
+	var gap: float = ui.turn_timer_widget.position.distance_to(plate.position)
+	ok(gap < 400.0, "the opponent's timer is drawn next to their name (%.0f px away)" % gap)
+
+	snapshot = base_snapshot()
+	snapshot["hands"]["my"] = plain_cards()
+	snapshot["current_turn_index"] = 0
+	await push(snapshot)
+	await process_frame
+	ok(str(ui.timer_view) == "my", "the timer moves back to me on my turn")
+
+	# --- between games -------------------------------------------------------
+	var between := base_snapshot()
+	between["hands"]["my"] = plain_cards()
+	between["phase"] = "game_result"
+	between["next_game_delay"] = 5.0
+	between["last_game_result"] = {
+		"winner": "A", "court": false, "points": 2, "draw": false, "ended_early": false,
+		"captured_10s": {"A": 3, "B": 1}, "captured_tricks": {"A": 8, "B": 5}
+	}
+	await push(between)
+	await process_frame
+	ok(ui.next_game_deadline_ms > 0, "a finished game arms the next-game countdown")
+	ok(ui.countdown_panel.visible, "the countdown is shown between games")
+	ok(str(ui.countdown_label.text).contains("NEXT GAME IN"), "the countdown says what it is counting to (got '%s')" % str(ui.countdown_label.text))
+	ok(not ui.timer_active, "the turn timer stops between games")
+	await create_timer(0.4).timeout
+	ok(not ui.turn_timer_widget.visible, "the turn timer fades out between games")
+
+	# --- end of match --------------------------------------------------------
+	var over := base_snapshot()
+	over["hands"]["my"] = plain_cards()
+	over["phase"] = "match_result"
+	over["is_host"] = true
+	over["scores"] = {"A": 15, "B": 6}
+	over["last_game_result"] = {
+		"winner": "A", "court": false, "points": 2, "draw": false, "ended_early": false,
+		"captured_10s": {"A": 3, "B": 1}, "captured_tricks": {"A": 8, "B": 5}
+	}
+	await push(over)
+	await process_frame
+
+	ok(ui.match_over_layer != null and is_instance_valid(ui.match_over_layer), "the end of the match raises a screen instead of nothing happening")
+	if ui.match_over_layer == null:
+		return
+	ok(ui.match_over_layer.find_child("MatchOverBox", true, false) != null, "the match-over screen has its banner")
+	ok(ui.match_over_layer.find_child("PlayAgainButton", true, false) != null, "the host is offered a rematch")
+	ok(ui.match_over_layer.find_child("MatchOverLeaveButton", true, false) != null, "there is a way back to the menu")
+	ok(not ui.countdown_panel.visible, "no next-game countdown runs once the match is over")
+
+	# A non-host must not be offered the rematch button.
+	await fresh_table()
+	var guest := over.duplicate(true)
+	guest["is_host"] = false
+	await push(guest)
+	await process_frame
+	ok(ui.match_over_layer != null, "a non-host also sees the match-over screen")
+	if ui.match_over_layer != null:
+		ok(ui.match_over_layer.find_child("PlayAgainButton", true, false) == null, "a non-host is not offered the rematch button")
+		ok(ui.match_over_layer.find_child("MatchOverLeaveButton", true, false) != null, "a non-host can still leave")
+
+	# Starting the next match clears the screen again.
+	var restarted := base_snapshot()
+	restarted["hands"]["my"] = plain_cards()
+	await push(restarted)
+	await process_frame
+	ok(ui.match_over_layer == null, "the match-over screen clears when a new match starts")
 
 func reveal_button_check() -> void:
 	# A fresh table: my turn, void in the lead suit, closed trump still hidden.

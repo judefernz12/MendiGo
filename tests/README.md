@@ -102,6 +102,20 @@ fresh one dealt out of the deck. It also checks the reveal obligation on the
 client, and that "Reveal Trump" is offered the moment the turn starts rather
 than only after a card is tapped.
 
+The same life cycle is run again with the trump belonging to an opponent, and
+there the check watches the *transition* rather than the end state: it samples
+the card count every frame while the snapshot renders and fails if it ever
+rises. A duplicate dealt from the deck is culled again by the opponent-stack
+cap once rendering settles, so the final counts look correct even though the
+player has already watched the stray card fly in from the middle of the table.
+
+It also covers the table's signposting, which is what makes a 6- or 8-player
+game readable: teammates' nameplates tinted blue and opponents' red, a thicker
+gold ring on the seat that is on turn, the countdown ring following that seat
+rather than living at the local one, the between-games countdown, and the
+match-over screen (with Play Again for the host only, and Back to Menu for
+everyone).
+
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
 they wait out the server's real bot and trick-resolve delays; the rest are
 quick.

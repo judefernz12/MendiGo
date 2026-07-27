@@ -138,6 +138,14 @@ func request_start_match() -> void:
 
 	rpc_id(1, "_server_start_match", current_room_code, local_player_id)
 
+func request_rematch() -> void:
+	if multiplayer.multiplayer_peer == null or current_room_code == "":
+		return
+	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+
+	rpc_id(1, "_server_request_rematch", current_room_code, local_player_id)
+
 func send_game_action(action: Dictionary) -> void:
 	if multiplayer.multiplayer_peer == null or current_room_code == "":
 		return
@@ -267,6 +275,12 @@ func _server_receive_game_action(code: String, player_id: String, action: Dictio
 	var server := get_node_or_null("/root/root")
 	if server != null and server.has_method("_server_receive_game_action"):
 		server._server_receive_game_action(code, player_id, action, multiplayer.get_remote_sender_id())
+
+@rpc("any_peer")
+func _server_request_rematch(code: String, player_id: String) -> void:
+	var server := get_node_or_null("/root/root")
+	if server != null and server.has_method("_server_request_rematch"):
+		server._server_request_rematch(code, player_id, multiplayer.get_remote_sender_id())
 
 @rpc("any_peer")
 func _server_request_game_state(code: String, player_id: String) -> void:

@@ -278,6 +278,17 @@ func _run() -> void:
 	none_clash(trump_chip, buttons, "the trump chip does not overlap the action buttons")
 	no_self_clash(panels, "the HUD panels do not overlap each other")
 
+	# The between-games countdown is hidden during play, but it shares the
+	# table with the hand and the piles when it does show (an early court
+	# leaves cards in hand), so its slot is checked here. It is deliberately
+	# not checked against the trick: the trick is always cleared by then.
+	var countdown := [control_rect(room_ui.countdown_panel)]
+	none_clash(countdown, my_cards, "the next-game countdown does not sit on the local hand")
+	none_clash(countdown, piles, "the next-game countdown does not sit on a captured pile")
+	none_clash(countdown, tens, "the next-game countdown does not sit on the captured 10s")
+	none_clash(countdown, panels, "the next-game countdown does not sit on another panel")
+	none_clash(countdown, buttons, "the next-game countdown does not sit on the action buttons")
+
 	none_clash(plates, opponent_cards, "nameplates do not sit on the opponents' cards")
 	none_clash(plates, trick_cards, "nameplates do not sit on the trick")
 	none_clash(plates, piles, "nameplates do not sit on a captured pile")

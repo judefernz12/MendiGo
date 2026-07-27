@@ -65,6 +65,8 @@ func _run() -> void:
 	court_early_end_check()
 	print("=== the revealer owes a trump ===")
 	reveal_must_play_trump_check()
+	print("=== end of match and rematch ===")
+	rematch_check()
 	print("=== 4-player full match ===")
 	await play_match(4)
 
@@ -640,6 +642,48 @@ func reveal_must_play_trump_check() -> void:
 	server._apply_play_card_action("REVEAL", "seat_2", "o_club")
 	ok(reveal_hand_size() == plain_before - 1, "a void player who did not reveal may still discard off-suit")
 	server.rooms.erase("REVEAL")
+
+func rematch_check() -> void:
+	var players := human_players(4)
+	var fake_room := {
+		"code": "REMATCH",
+		"settings": server._normalize_room_settings({"player_count": 4, "target_score": 15}),
+		"players": players,
+		"dealer_seat_id": "seat_0",
+		"trump_holder_seat_id": "seat_1",
+		"phase": "match"
+	}
+	var s: Dictionary = server._create_match_state(fake_room)
+	s["phase"] = "match_result"
+	s["scores"] = {"A": 15, "B": 6}
+	s["last_game_result"] = {"winner": "A", "court": false, "points": 2, "draw": false, "ended_early": false}
+	fake_room["match_state"] = s
+	server.rooms["REMATCH"] = fake_room
+
+	# The client needs to know who may offer a rematch.
+	var host_snap: Dictionary = server._build_client_snapshot(server.rooms["REMATCH"], "seat_0")["game_state"]
+	var guest_snap: Dictionary = server._build_client_snapshot(server.rooms["REMATCH"], "seat_1")["game_state"]
+	ok(bool(host_snap.get("is_host", false)), "the host's snapshot says it is the host")
+	ok(not bool(guest_snap.get("is_host", true)), "a non-host snapshot does not claim to be the host")
+	ok(float(host_snap.get("next_game_delay", 0.0)) > 0.0, "snapshots carry the next-game delay for the countdown")
+	ok(float(host_snap.get("turn_time_limit", 0.0)) == server.TURN_DEADLINE_S, "snapshots carry the real turn time limit")
+
+	# players[0] holds peer 10 and is the host; hp1 on peer 11 is not.
+	server._server_request_rematch("REMATCH", "hp1", 11)
+	ok(str(server.rooms["REMATCH"]["match_state"]["phase"]) == "match_result", "only the host can start a rematch")
+
+	server._server_request_rematch("REMATCH", "hp0", 10)
+	var after: Dictionary = server.rooms["REMATCH"]["match_state"]
+	ok(int(after["scores"]["A"]) == 0 and int(after["scores"]["B"]) == 0, "a rematch resets the scores")
+	ok(str(after["phase"]) != "match_result", "a rematch starts a new game")
+	var dealt := true
+	for seat in after["hands"].keys():
+		if (after["hands"][seat] as Array).is_empty():
+			dealt = false
+	ok(dealt, "a rematch deals a fresh hand to every seat")
+	ok(str(after["dealer_seat_id"]) == "seat_1", "the deal passes on for the rematch")
+	ok((after["last_game_result"] as Dictionary).is_empty(), "the rematch clears the old result")
+	server.rooms.erase("REMATCH")
 
 func deal_unit_check(player_count: int, cards_each: int, first_batch: int, pattern: Array) -> void:
 	# Exercises the dealing rules directly, with no bot timing involved.

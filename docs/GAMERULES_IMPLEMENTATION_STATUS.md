@@ -42,7 +42,12 @@ the automated checks in `tests/` - see `tests/README.md`.
   side's parity; a player who never picked is pinned to the side they were
   seated on so nobody else's choice can move them; a full side is refused;
   bots fill whatever is left (tested)
-- Match ends at the target score; otherwise the next game starts automatically
+- The next game starts automatically 5 s after a result (9 s after a court, so
+  the celebration can finish). The delay is sent in the snapshot so the client
+  can show an honest countdown rather than guessing
+- Match ends at the target score and stops there with a match-over screen.
+  The host may start a rematch on the same table: same seats, scores back to
+  zero, the deal passing on as it would between games (tested)
 - Dealer rotation: dealer's team wins -> pass the deal on; loses normal ->
   same dealer; loses court -> skip one seat (tested)
 - Scores carry across games in a match (tested)
@@ -80,6 +85,18 @@ a delta cannot be reconciled.
   celebration can finish (tested)
 
 ## HUD and table layout
+
+Reading the table at a glance:
+
+- every seat carries a tinted nameplate - blue for your side, red for the
+  opposition. This matters most at 6- and 8-player tables, where your partners
+  are not simply the player opposite you
+- the seat on turn gets a thick gold ring around its plate that breathes, and
+  the countdown ring moves to that seat, so whose turn it is reads from
+  anywhere on the table instead of only from the colour of the name
+- between games a countdown sits in the middle of the table ("NEXT GAME IN 5")
+- when the match is won, a full screen shows the winner and the final score,
+  with Play Again for the host and Back to Menu for everyone
 
 Three HUD anchors, one job each. Top left: the match panel - a labelled grid
 with a row per team giving score, 10s (shown as `n / 4` against the court

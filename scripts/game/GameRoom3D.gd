@@ -68,6 +68,11 @@ const COL_MUTED := Color(0.60, 0.70, 0.65)
 const COL_YOU := Color(0.46, 0.83, 0.60)
 const COL_THEM := Color(0.95, 0.55, 0.45)
 const COL_GOLD := Color(0.95, 0.83, 0.44)
+# Who is on my side. Blue reads as "with me", red as "against me", which
+# matters most at 6- and 8-player tables where partners are not simply
+# opposite you.
+const COL_TEAM_MINE := Color(0.36, 0.66, 0.98)
+const COL_TEAM_THEIRS := Color(0.95, 0.42, 0.40)
 
 const TENS_IN_DECK := 4
 const COURT_CELEBRATION_TIME := 3.4
@@ -148,6 +153,8 @@ var selected_card: Node3D = null
 var my_hand_sorted: bool = false
 
 var timer_active: bool = false
+var timer_view: String = ""          # which seat the ring is counting down for
+var turn_time_limit: float = TURN_TIME_LIMIT
 var time_left: float = 0.0
 var timer_token: int = 0
 var timer_pulse_t: float = 0.0
@@ -155,6 +162,8 @@ var timer_fade_tween: Tween = null
 var trump_icon_tween: Tween = null
 
 var nameplates: Dictionary = {}
+var nameplate_styles: Dictionary = {}   # view name -> StyleBoxFlat on the plate
+var turn_pulse_t: float = 0.0
 var hud_values: Dictionary = {}      # scoreboard cell name -> Label
 var score_panel: PanelContainer = null
 var trump_panel: PanelContainer = null
@@ -162,6 +171,12 @@ var leave_button: Button = null
 
 var court_celebrated: bool = false
 var celebration_layer: Control = null
+
+var is_host: bool = false
+var next_game_deadline_ms: int = 0
+var countdown_panel: PanelContainer = null
+var countdown_label: Label = null
+var match_over_layer: Control = null
 
 # =========================================================================
 # setup
@@ -178,7 +193,10 @@ func _ready() -> void:
 	dealer_view = str(abs_to_local_view.get(str(match_setup.get("dealer_seat_id", "")), ""))
 	dealer_draw_cards = (match_setup.get("dealer_draw_cards", []) as Array).duplicate(true)
 
+	is_host = bool(match_setup.get("is_host", false))
+
 	_build_status_ui()
+	_build_countdown_ui()
 	_ensure_nameplates()
 
 	play_button.pressed.connect(_on_play_button_pressed)
@@ -483,6 +501,7 @@ func _render_loop() -> void:
 			is_rendering = false
 			return
 		state = target
+		_sync_result_state(target)
 		_check_court_celebration()
 		_refresh_hud()
 	is_rendering = false
@@ -957,6 +976,12 @@ func _animate_hidden_trump_set_aside(previous: Dictionary, target: Dictionary) -
 	card.selected = false
 	card.set_face_up(false)
 	hidden_trump_node = card
+	# _animate_deal works out how many cards a seat was dealt by comparing the
+	# server's hand size against this count, so it has to follow the card out
+	# of the hand. Otherwise the seat looks one card short and gets an extra
+	# one dealt from the deck.
+	if holder_view != "my":
+		seat_card_counts[holder_view] = maxi(0, int(seat_card_counts.get(holder_view, 0)) - 1)
 
 	var tween := _tween_card(card, hidden_trump_slot.position, CARD_FLAT_ROT, TRUMP_MOVE_TIME)
 	_layout_hand(holder_view)
@@ -1005,6 +1030,11 @@ func _animate_hidden_trump_return(previous: Dictionary, target: Dictionary) -> v
 	var cards: Array = _hand(holder_view)
 	cards.append(card)
 	hand_cards[holder_view] = cards
+	# The seat is one card richer again; without this _animate_deal sees the
+	# server's larger hand as a fresh deal and flies a duplicate in from the
+	# deck in the middle of the table.
+	if holder_view != "my":
+		seat_card_counts[holder_view] = int(seat_card_counts.get(holder_view, 0)) + 1
 
 	var count := cards.size()
 	var t := _hand_transform(holder_view, count - 1, count)
@@ -1461,10 +1491,23 @@ func _ensure_nameplates() -> void:
 		var plate := Label.new()
 		plate.size = NAMEPLATE_SIZE
 		plate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		plate.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		plate.add_theme_font_size_override("font_size", 14)
 		plate.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-		plate.add_theme_constant_override("outline_size", 5)
+		plate.add_theme_constant_override("outline_size", 4)
 		plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+		# A tinted plate behind the name is what actually carries the team
+		# colour; the text stays near-white so it is still easy to read.
+		var style := StyleBoxFlat.new()
+		style.set_corner_radius_all(9)
+		style.content_margin_left = 8
+		style.content_margin_right = 8
+		style.content_margin_top = 2
+		style.content_margin_bottom = 2
+		plate.add_theme_stylebox_override("normal", style)
+		nameplate_styles[view_name] = style
+
 		hud.add_child(plate)
 		nameplates[view_name] = plate
 
@@ -1472,6 +1515,38 @@ func _ensure_nameplates() -> void:
 		if not seat_order.has(view_name):
 			(nameplates[view_name] as Label).queue_free()
 			nameplates.erase(view_name)
+			nameplate_styles.erase(view_name)
+
+func _team_of_view(view_name: String) -> String:
+	return str((seat_to_player.get(view_name, {}) as Dictionary).get("team", ""))
+
+func _is_my_team(view_name: String) -> bool:
+	var team := _team_of_view(view_name)
+	return team != "" and team == my_team
+
+func _team_color(view_name: String) -> Color:
+	return COL_TEAM_MINE if _is_my_team(view_name) else COL_TEAM_THEIRS
+
+func _style_nameplate(view_name: String, plate: Label, is_turn: bool) -> void:
+	var style: StyleBoxFlat = nameplate_styles.get(view_name, null)
+	if style == null:
+		return
+	var team := _team_color(view_name)
+
+	if is_turn:
+		# On top of the team tint, the active seat gets a gold ring that
+		# breathes, so whose turn it is reads at a glance from anywhere on the
+		# table rather than only from the colour of the text.
+		var glow: float = 0.55 + 0.45 * absf(sin(turn_pulse_t * 3.0))
+		style.bg_color = Color(team.r, team.g, team.b, 0.42)
+		style.set_border_width_all(3)
+		style.border_color = Color(COL_GOLD.r, COL_GOLD.g, COL_GOLD.b, glow)
+		plate.add_theme_color_override("font_color", Color(1, 1, 1))
+	else:
+		style.bg_color = Color(team.r * 0.35, team.g * 0.35, team.b * 0.35, 0.72)
+		style.set_border_width_all(2)
+		style.border_color = Color(team.r, team.g, team.b, 0.85)
+		plate.add_theme_color_override("font_color", Color(0.93, 0.96, 0.98))
 
 func _display_name(view_name: String) -> String:
 	if view_name == "my":
@@ -1502,9 +1577,8 @@ func _update_nameplates() -> void:
 		if not bool(p.get("is_connected", true)) and not bool(p.get("is_bot", false)):
 			text += "  [offline]"
 		plate.text = text
-
 		plate.position = _nameplate_position(view_name, project, plate.size, screen)
-		plate.add_theme_color_override("font_color", Color(1.0, 0.84, 0.4) if view_name == turn_view else Color(0.92, 0.96, 0.93))
+		_style_nameplate(view_name, plate, view_name == turn_view)
 
 func _refresh_hud() -> void:
 	_refresh_buttons()
@@ -1609,6 +1683,159 @@ func _animate_trump_icon_in() -> void:
 	trump_icon_tween.parallel().tween_property(trump_suit_icon, "modulate:a", 1.0, 0.2)
 	trump_icon_tween.parallel().tween_property(trump_suit_icon, "scale", Vector2(1.12, 1.12), 0.2)
 	trump_icon_tween.tween_property(trump_suit_icon, "scale", Vector2.ONE, 0.12)
+
+# =========================================================================
+# between games, and the end of the match
+# =========================================================================
+
+func _sync_result_state(target: Dictionary) -> void:
+	var new_phase := str(target.get("phase", ""))
+	is_host = bool(target.get("is_host", is_host))
+	turn_time_limit = maxf(1.0, float(target.get("turn_time_limit", turn_time_limit)))
+
+	if new_phase == "game_result":
+		if next_game_deadline_ms == 0:
+			var delay := float(target.get("next_game_delay", 5.0))
+			next_game_deadline_ms = Time.get_ticks_msec() + int(delay * 1000.0)
+	else:
+		next_game_deadline_ms = 0
+		countdown_panel.visible = false
+
+	if new_phase == "match_result":
+		_show_match_over(target)
+	else:
+		_hide_match_over()
+
+func _update_next_game_countdown() -> void:
+	if next_game_deadline_ms == 0:
+		return
+	var left := float(next_game_deadline_ms - Time.get_ticks_msec()) / 1000.0
+	if left <= 0.0:
+		countdown_panel.visible = false
+		return
+	countdown_panel.visible = true
+	countdown_label.text = "NEXT GAME IN  %d" % int(ceil(left))
+
+func _build_countdown_ui() -> void:
+	countdown_panel = PanelContainer.new()
+	countdown_panel.name = "NextGameCountdown"
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.04, 0.09, 0.06, 0.9)
+	style.border_color = COL_GOLD
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(12)
+	style.content_margin_left = 22
+	style.content_margin_right = 22
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	countdown_panel.add_theme_stylebox_override("panel", style)
+	countdown_panel.anchor_left = 0.5
+	countdown_panel.anchor_right = 0.5
+	countdown_panel.anchor_top = 0.5
+	countdown_panel.anchor_bottom = 0.5
+	countdown_panel.offset_left = -140.0
+	countdown_panel.offset_right = 140.0
+	countdown_panel.offset_top = 70.0
+	countdown_panel.offset_bottom = 116.0
+	countdown_panel.visible = false
+	countdown_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(countdown_panel)
+
+	countdown_label = _hud_label("", 20, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER)
+	countdown_panel.add_child(countdown_label)
+
+func _hide_match_over() -> void:
+	if match_over_layer != null and is_instance_valid(match_over_layer):
+		match_over_layer.queue_free()
+	match_over_layer = null
+
+func _show_match_over(target: Dictionary) -> void:
+	if match_over_layer != null and is_instance_valid(match_over_layer):
+		return
+
+	var result: Dictionary = target.get("last_game_result", {})
+	var scores: Dictionary = target.get("scores", {"A": 0, "B": 0})
+	var other_team := "B" if my_team == "A" else "A"
+	var won := str(result.get("winner", "")) == my_team
+
+	var layer := Control.new()
+	layer.name = "MatchOver"
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(layer)
+	match_over_layer = layer
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(center)
+
+	var box := VBoxContainer.new()
+	box.name = "MatchOverBox"
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 6)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(box)
+
+	var headline := _hud_label("YOU WIN THE MATCH" if won else "MATCH LOST", 54, COL_GOLD if won else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
+	headline.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
+	headline.add_theme_constant_override("outline_size", 10)
+	box.add_child(headline)
+
+	var score_line := _hud_label("%d  -  %d" % [int(scores.get(my_team, 0)), int(scores.get(other_team, 0))], 40, COL_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	score_line.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
+	score_line.add_theme_constant_override("outline_size", 8)
+	box.add_child(score_line)
+
+	var caption := _hud_label("your team  ·  opponents      (first to %d)" % int(target.get("target_score", 15)), 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(caption)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 18)
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(spacer)
+
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	buttons.add_theme_constant_override("separation", 12)
+	box.add_child(buttons)
+
+	if is_host:
+		var again := Button.new()
+		again.name = "PlayAgainButton"
+		again.text = "Play Again"
+		again.theme_type_variation = &"AccentButton"
+		again.custom_minimum_size = Vector2(180, 48)
+		again.pressed.connect(_on_play_again_pressed)
+		buttons.add_child(again)
+	else:
+		var waiting := _hud_label("Waiting for the host to start a rematch", 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		box.add_child(waiting)
+
+	var quit_button := Button.new()
+	quit_button.name = "MatchOverLeaveButton"
+	quit_button.text = "Back to Menu"
+	quit_button.custom_minimum_size = Vector2(180, 48)
+	quit_button.pressed.connect(_on_leave_pressed)
+	buttons.add_child(quit_button)
+
+	if won:
+		_spawn_confetti(layer, 60)
+
+	var fade := layer.create_tween()
+	fade.tween_property(dim, "color:a", 0.72, 0.35)
+
+func _on_play_again_pressed() -> void:
+	NetworkManager.request_rematch()
+	if match_over_layer != null and is_instance_valid(match_over_layer):
+		for button in match_over_layer.find_children("*", "Button", true, false):
+			(button as Button).disabled = true
 
 # =========================================================================
 # court celebration
@@ -1797,16 +2024,40 @@ func _refresh_phase_message() -> void:
 # turn timer
 # =========================================================================
 
+func _turn_timer_position(view_name: String, camera: Camera3D) -> Vector2:
+	var size := turn_timer_widget.size
+	if view_name == "my":
+		var anchor := _seat_anchor_position("my").lerp(_trick_slot_position("my"), 0.4)
+		return camera.unproject_position(_to_world(anchor)) - size * 0.5
+
+	# For everyone else the ring sits beside their nameplate, which is already
+	# placed clear of their cards.
+	var plate: Label = nameplates.get(view_name, null)
+	var screen := get_viewport().get_visible_rect().size
+	if plate == null:
+		var project := func(world: Vector3) -> Vector2: return camera.unproject_position(world)
+		return _seat_screen_rect(view_name, project).get_center() - size * 0.5
+
+	var pos := Vector2(plate.position.x + plate.size.x + 8.0, plate.position.y + plate.size.y * 0.5 - size.y * 0.5)
+	if pos.x + size.x > screen.x - 8.0:
+		pos.x = plate.position.x - size.x - 8.0
+	pos.y = clampf(pos.y, 6.0, maxf(6.0, screen.y - size.y - 6.0))
+	return pos
+
 func _refresh_turn_timer() -> void:
-	var should_run := phase == "playing" and my_turn and not table_busy
-	if should_run and not timer_active:
+	# The ring follows whoever is on turn, so the wait is visible from every
+	# seat rather than only when it is your own move.
+	var turn_view := _current_turn_view()
+	var should_run := phase == "playing" and turn_view != "" and not table_busy
+	if should_run and (not timer_active or turn_view != timer_view):
+		timer_view = turn_view
 		_start_turn_timer()
 	elif not should_run and timer_active:
 		_stop_turn_timer()
 
 func _start_turn_timer() -> void:
 	timer_active = true
-	time_left = TURN_TIME_LIMIT
+	time_left = turn_time_limit
 	timer_token += 1
 	if timer_fade_tween != null:
 		timer_fade_tween.kill()
@@ -1817,6 +2068,7 @@ func _start_turn_timer() -> void:
 
 func _stop_turn_timer() -> void:
 	timer_active = false
+	timer_view = ""
 	timer_token += 1
 	timer_pulse_t = 0.0
 	turn_timer_widget.scale = Vector2.ONE
@@ -1827,7 +2079,9 @@ func _stop_turn_timer() -> void:
 	timer_fade_tween.tween_callback(func(): turn_timer_widget.visible = false)
 
 func _process(delta: float) -> void:
+	turn_pulse_t += delta
 	_update_nameplates()
+	_update_next_game_countdown()
 
 	if not timer_active:
 		return
@@ -1836,11 +2090,10 @@ func _process(delta: float) -> void:
 
 	var camera := get_viewport().get_camera_3d()
 	if camera != null:
-		var anchor := _seat_anchor_position("my").lerp(_trick_slot_position("my"), 0.4)
-		turn_timer_widget.position = camera.unproject_position(_to_world(anchor)) - turn_timer_widget.size * 0.5
+		turn_timer_widget.position = _turn_timer_position(timer_view, camera)
 
 	turn_timer_text.text = str(int(ceil(time_left)))
-	turn_timer_ring.value = clampf(time_left / TURN_TIME_LIMIT, 0.0, 1.0) * 100.0
+	turn_timer_ring.value = clampf(time_left / turn_time_limit, 0.0, 1.0) * 100.0
 	var color := Color(0.2, 1.0, 0.2).lerp(Color(1.0, 0.2, 0.2), clampf((5.0 - time_left) / 5.0, 0.0, 1.0))
 	turn_timer_text.modulate = color
 	turn_timer_ring.tint_progress = color
