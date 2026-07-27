@@ -181,6 +181,8 @@ var turn_pulse_t: float = 0.0
 var hud_values: Dictionary = {}      # scoreboard cell name -> Label
 var score_panel: PanelContainer = null
 var trump_panel: PanelContainer = null
+var lead_suit_icon: TextureRect = null
+var lead_label: Label = null
 var leave_button: Button = null
 
 var court_celebrated: bool = false
@@ -1721,11 +1723,13 @@ func _build_status_ui() -> void:
 	hud_values["turn"] = turn_value
 	footer.add_child(turn_value)
 
-	# Trump gets its own chip in the bottom-right corner: big enough to read at
-	# a glance, next to the hand and the action buttons where the player is
-	# already looking, and out of the far corner it used to hide in.
+	# The suit chip in the bottom-right corner: big enough to read at a glance,
+	# next to the hand and the action buttons where the player is already
+	# looking, and out of the far corner it used to hide in. It carries the two
+	# suits that decide what you may play - the trump, and the suit led this
+	# trick, which you must follow if you can.
 	trump_panel = PanelContainer.new()
-	trump_panel.name = "TrumpChip"
+	trump_panel.name = "SuitChip"
 	var trump_style := StyleBoxFlat.new()
 	trump_style.bg_color = Color(0.04, 0.09, 0.06, 0.88)
 	trump_style.border_color = Color(0.18, 0.29, 0.23, 0.9)
@@ -1733,30 +1737,35 @@ func _build_status_ui() -> void:
 	trump_style.set_corner_radius_all(14)
 	trump_style.content_margin_left = 14
 	trump_style.content_margin_right = 16
-	trump_style.content_margin_top = 8
-	trump_style.content_margin_bottom = 8
+	trump_style.content_margin_top = 6
+	trump_style.content_margin_bottom = 6
 	trump_panel.add_theme_stylebox_override("panel", trump_style)
 	trump_panel.anchor_left = 1.0
 	trump_panel.anchor_top = 1.0
 	trump_panel.anchor_right = 1.0
 	trump_panel.anchor_bottom = 1.0
 	trump_panel.offset_left = -212.0
-	trump_panel.offset_top = -86.0
+	trump_panel.offset_top = -112.0
 	trump_panel.offset_right = -14.0
 	trump_panel.offset_bottom = -22.0
 	trump_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(trump_panel)
 
+	var chip_column := VBoxContainer.new()
+	chip_column.add_theme_constant_override("separation", 2)
+	chip_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	trump_panel.add_child(chip_column)
+
 	var trump_row := HBoxContainer.new()
 	trump_row.add_theme_constant_override("separation", 10)
-	trump_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	trump_row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	trump_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	trump_panel.add_child(trump_row)
+	chip_column.add_child(trump_row)
 
 	# The icon and label live in the scene; move them into the chip so their
 	# layout is container-driven instead of anchored to the screen corner.
 	trump_suit_icon.get_parent().remove_child(trump_suit_icon)
-	trump_suit_icon.custom_minimum_size = Vector2(40, 40)
+	trump_suit_icon.custom_minimum_size = Vector2(32, 32)
 	trump_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	trump_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	trump_row.add_child(trump_suit_icon)
@@ -1770,9 +1779,40 @@ func _build_status_ui() -> void:
 	trump_label.get_parent().remove_child(trump_label)
 	trump_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	trump_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	trump_label.add_theme_font_size_override("font_size", 20)
+	trump_label.add_theme_font_size_override("font_size", 18)
 	trump_label.add_theme_color_override("font_color", COL_GOLD)
 	trump_text.add_child(trump_label)
+
+	var chip_rule := HSeparator.new()
+	chip_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_column.add_child(chip_rule)
+
+	# The suit led this trick. Until now the only way to learn it was to pick an
+	# illegal card and be told off, and it is the other half of "what may I
+	# play?" - the trump beats it, everything else has to follow it.
+	var lead_row := HBoxContainer.new()
+	lead_row.add_theme_constant_override("separation", 10)
+	lead_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	lead_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_column.add_child(lead_row)
+
+	lead_suit_icon = TextureRect.new()
+	lead_suit_icon.name = "LeadSuitIcon"
+	lead_suit_icon.custom_minimum_size = Vector2(32, 32)
+	lead_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	lead_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	lead_suit_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lead_row.add_child(lead_suit_icon)
+
+	var lead_text := VBoxContainer.new()
+	lead_text.add_theme_constant_override("separation", 0)
+	lead_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lead_row.add_child(lead_text)
+	lead_text.add_child(_hud_label("LEAD", 12, COL_MUTED))
+
+	lead_label = _hud_label("-", 18, COL_MUTED)
+	lead_label.name = "LeadSuitLabel"
+	lead_text.add_child(lead_label)
 
 	leave_button = Button.new()
 	leave_button.name = "LeaveButton"
@@ -1916,6 +1956,7 @@ func _refresh_hud() -> void:
 	_refresh_scoreboard()
 	_refresh_trump_label()
 	_refresh_trump_icon()
+	_refresh_lead_chip()
 	_refresh_phase_message()
 	_refresh_turn_timer()
 
@@ -2014,16 +2055,40 @@ func _refresh_trump_label() -> void:
 		trump_label.text = "Not set"
 		trump_label.add_theme_color_override("font_color", COL_MUTED)
 
-func _refresh_trump_icon() -> void:
-	if not trump_active or trump_suit == "":
-		trump_suit_icon.visible = false
-		return
-	var path := "res://assets/ui/trump_icons/%s.png" % trump_suit.to_lower()
+func _suit_icon(suit: String) -> Texture2D:
+	if suit == "":
+		return null
+	var path := "res://assets/ui/trump_icons/%s.png" % suit.to_lower()
 	if not ResourceLoader.exists(path):
-		trump_suit_icon.visible = false
+		return null
+	return load(path)
+
+func _refresh_trump_icon() -> void:
+	var icon := _suit_icon(trump_suit) if trump_active else null
+	trump_suit_icon.texture = icon
+	trump_suit_icon.visible = icon != null
+
+func _refresh_lead_chip() -> void:
+	# Only meaningful while a trick is actually being played; between tricks
+	# there is nothing to follow yet.
+	var showing := phase == "playing" and lead_suit != ""
+	var icon := _suit_icon(lead_suit) if showing else null
+	if lead_suit_icon != null and is_instance_valid(lead_suit_icon):
+		lead_suit_icon.texture = icon
+		lead_suit_icon.visible = icon != null
+	if lead_label == null or not is_instance_valid(lead_label):
 		return
-	trump_suit_icon.texture = load(path)
-	trump_suit_icon.visible = true
+
+	if not showing:
+		lead_label.text = "Open" if phase == "playing" else "-"
+		lead_label.add_theme_color_override("font_color", COL_MUTED)
+		return
+
+	lead_label.text = lead_suit.capitalize()
+	# Gold while this client still holds the suit and so is bound to follow it;
+	# muted once they are void and free to play anything.
+	var bound := _my_hand_has_suit(lead_suit) and not is_spectator
+	lead_label.add_theme_color_override("font_color", COL_GOLD if bound else COL_TEXT)
 
 func _animate_trump_icon_in() -> void:
 	if trump_icon_tween != null:

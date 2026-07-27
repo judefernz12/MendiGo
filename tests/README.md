@@ -59,6 +59,9 @@ correctly. It feeds real server snapshots into the real game scene and checks:
 - a court raises the celebration overlay with its banner and confetti, the
   result chip and banner message both say COURT, resending the same result
   does not stack a second overlay, and a new game re-arms it
+- the suit chip names the suit led this trick, with its icon, highlighted only
+  while this hand still holds that suit and is therefore bound to follow it,
+  and reading "Open" with no icon before anyone has played
 - a watcher gets a nameplate for every seat, the bottom one included, showing
   that player's real name - it used to be skipped, because for a player the
   bottom seat is themselves, which was the one missing name tag
@@ -82,6 +85,13 @@ server output and checks the team picker: each side lists the right players,
 empty seats read as bots, the headers show how full each side is, the join
 buttons reflect where the local player actually sits, and only the host sees
 the start button.
+
+It also covers the id clash between two clients on one machine. They share
+`user://identity.cfg` and so share a player id whatever their names are; the
+server refuses the second one and the client must silently retry with a fresh
+id. The check pins the part that was broken: the retry has to use the room being
+*attempted*, since `current_room_code` is only set once a join has succeeded, so
+on a first join it is empty and nothing happened at all.
 
 It also covers watching, side-swapping and the handoff into the game. A watcher
 must not be shown seat controls that would silently do nothing, and the lobby

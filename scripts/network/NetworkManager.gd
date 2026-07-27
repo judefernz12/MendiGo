@@ -39,6 +39,11 @@ var latest_game_state_snapshot: Dictionary = {}
 # had already started, the table was full, or it asked to watch.
 var is_spectator: bool = false
 
+# The room a join is currently being attempted on. Kept separately from
+# current_room_code, which is only filled in once a join has succeeded.
+var pending_join_code: String = ""
+var pending_join_as_spectator: bool = false
+
 # Handed from the lobby to the game scene. Kept in memory on purpose: two
 # clients running on one machine share user://, so writing this to a file
 # made the second client load the first client's seat.
@@ -127,6 +132,8 @@ func disconnect_from_server() -> void:
 	pending_game_entry.clear()
 	pending_match_setup.clear()
 	is_spectator = false
+	pending_join_code = ""
+	pending_join_as_spectator = false
 
 func create_room(room_settings: Dictionary = {}) -> void:
 	if multiplayer.multiplayer_peer == null:
@@ -144,6 +151,12 @@ func join_room(room_code: String, as_spectator: bool = false) -> void:
 		return
 	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
 		return
+
+	# Remembered so a refused join can be retried. current_room_code is only
+	# set once a join succeeds, so on a first attempt it is still empty - which
+	# is why the automatic retry after an id clash used to do nothing at all.
+	pending_join_code = room_code.to_upper()
+	pending_join_as_spectator = as_spectator
 
 	rpc_id(1, "_server_join_room", room_code.to_upper(), {
 		"id": local_player_id,
@@ -262,18 +275,29 @@ func _client_room_error(message: String) -> void:
 
 @rpc("authority")
 func _client_identity_conflict() -> void:
-	# This machine's saved id is already sitting in the room (a second client
-	# on the same PC). Take a fresh one and try again as a new player.
+	# The saved id is already live in that room. Two clients on one machine
+	# share user://, so they share identity.cfg - the names differ but the id
+	# does not, and the id is what the server matches on. Take a fresh one and
+	# try again as a new player.
+	# Deliberately not saved. Overwriting identity.cfg would take the seat-
+	# reclaiming identity away from whichever window owns it, so the newcomer
+	# runs on an in-memory id for this session instead.
 	local_player_id = _new_player_id()
-	_save_identity()
-	emit_signal("room_error", "That seat is already taken by another window. Rejoining as a new player.")
-	if current_room_code != "":
-		join_room(current_room_code, is_spectator)
+
+	var retry_code := pending_join_code if pending_join_code != "" else current_room_code
+	if retry_code == "":
+		emit_signal("room_error", "Another window on this device is already using this player. Try again.")
+		return
+
+	# Silent by design: the retry is about to succeed, and the old message
+	# named a seat the player never had.
+	join_room(retry_code, pending_join_as_spectator)
 
 @rpc("authority")
 func _client_room_joined(room_code: String, as_spectator: bool = false) -> void:
 	current_room_code = room_code
 	is_spectator = as_spectator
+	pending_join_code = ""
 	emit_signal("room_joined", room_code)
 
 @rpc("authority")

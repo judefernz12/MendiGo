@@ -116,9 +116,45 @@ func _run() -> void:
 	spectator_lobby_check()
 	await process_frame
 	entry_check()
+	identity_conflict_recovery_check()
 	online_menu_check()
 
 	_report()
+
+# --- two windows on one machine --------------------------------------------
+
+func identity_conflict_recovery_check() -> void:
+	# Two clients on one machine share user://, so they share identity.cfg and
+	# therefore the player id - names have nothing to do with it. The server
+	# refuses the second one and tells it to take a fresh id, which is fine.
+	# What was broken is the retry: it went to current_room_code, which is only
+	# filled in once a join has *succeeded*. On a first join it was still empty,
+	# so a brand new player got the error and nothing else happened.
+	var errors: Array = []
+	var on_error := func(message: String) -> void: errors.append(message)
+	net.room_error.connect(on_error)
+
+	var before_id: String = net.local_player_id
+	net.current_room_code = ""
+	net.pending_join_code = "ABCDE"
+	net.pending_join_as_spectator = false
+
+	net._client_identity_conflict()
+	ok(net.local_player_id != before_id, "a clash mints a fresh player id")
+	ok(net.local_player_id != "", "and it is a real id")
+	ok(net.pending_join_code == "ABCDE", "the room being joined is remembered for the retry")
+	ok(errors.is_empty(), "a recoverable clash does not shout at a player who never had a seat")
+
+	# With nothing to retry, the player must at least be told.
+	net.pending_join_code = ""
+	net.current_room_code = ""
+	net._client_identity_conflict()
+	ok(errors.size() == 1, "a clash with no room to retry does report itself")
+
+	net.room_error.disconnect(on_error)
+	net.local_player_id = before_id
+	net.current_room_code = code
+	net.pending_join_code = ""
 
 # --- the way in ------------------------------------------------------------
 

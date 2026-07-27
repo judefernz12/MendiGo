@@ -58,11 +58,25 @@ waiting, so the timing cannot lose it.
 
 ### Two clients on one machine (tested)
 
-They share `user://`, so they would share that saved id, and the second one
-would look like the first one reconnecting and take its seat. The server now
-refuses to hand over a seat whose player is still connected on a different
-live connection, and tells that client to mint a fresh id and rejoin as a new
-player. Once the first client really has gone, the id works normally again.
+They share `user://`, so they share `identity.cfg` and therefore the player id.
+Names have nothing to do with it - the server matches on the id. The second
+client would otherwise look like the first one reconnecting and take its seat,
+so the server refuses to hand over a seat whose player is still connected on a
+different live connection, and tells that client to mint a fresh id and rejoin
+as a new player. Two browser tabs on the same page count as one machine.
+
+**The retry used to go nowhere.** It aimed at `current_room_code`, which is only
+filled in once a join has *succeeded* - so on a **first** join it was still
+empty and the retry was skipped. A brand new player got
+"That seat is already taken by another window" and nothing else happened, which
+is exactly the case where the message made least sense. The code being attempted
+is now kept in `pending_join_code`, the retry uses it, and the message is gone:
+the second attempt carries a fresh id and cannot clash, so there is nothing to
+report. If there really is no room to retry, the player is told plainly.
+
+The reminted id is deliberately **not** written back to `identity.cfg`.
+Overwriting it would take the seat-reclaiming identity away from whichever
+window owns it, so the newcomer runs on an in-memory id for that session.
 
 ### Someone joins mid-game (tested)
 

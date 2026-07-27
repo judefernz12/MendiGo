@@ -143,11 +143,20 @@ Reading the table at a glance:
 Three HUD anchors, one job each. Top left: the match panel - a labelled grid
 with a row per team giving score, 10s (shown as `n / 4` against the court
 target, highlighting as a team closes in) and tricks, then the dealer and whose
-turn it is. Bottom right: the trump chip - a 40 px suit icon and the suit name,
-next to the hand and the action buttons where the player is already looking
-(it reads "Not set" in grey until the trump is decided). Top centre: the
-message banner, which also carries the game result coloured by who won, so
-there is no separate result chip.
+turn it is. Bottom right: the suit chip, next to the hand and the action buttons
+where the player is already looking. Top centre: the message banner, which also
+carries the game result coloured by who won, so there is no separate result
+chip.
+
+The suit chip carries both suits that decide what you may play, each as an icon
+and a name:
+
+- **TRUMP** - "Not set" in grey until the trump is decided
+- **LEAD** - the suit led this trick, which you must follow if you hold it. It
+  reads "Open" before anyone has played, and the suit name is gold while this
+  hand still holds that suit (so following is compulsory) and plain once it is
+  void and free to play anything. Until this was added, the only way to learn
+  the lead suit was to pick an illegal card and be told off for it.
 
 Table geometry is checked, not eyeballed. `tests/layout_test.gd` projects every
 card and HUD element onto a 1280x720 screen through the real camera and asserts

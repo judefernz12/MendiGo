@@ -313,6 +313,8 @@ func _run() -> void:
 	ok(str(room_ui.hud_values["target"].text) == "RACE TO %d" % int(drawn.get("target_score", 15)), "the scoreboard shows the target score")
 	ok(str(room_ui.hud_values["dealer"].text) == room_ui._display_name(room_ui.dealer_view), "the scoreboard names the dealer")
 
+	await lead_suit_chip_check()
+
 	# --- winning a court is celebrated ---------------------------------------
 	var court_snapshot: Dictionary = server._build_client_snapshot(srv_room(), human_seat)
 	var court_state: Dictionary = court_snapshot["game_state"]
@@ -372,6 +374,45 @@ func _run() -> void:
 	await spectator_view_check(net)
 
 	_report()
+
+# --- the suit that is being followed ---------------------------------------
+
+func lead_suit_chip_check() -> void:
+	# What you may play is decided by two suits: the trump, and the suit led
+	# this trick. The trump had a chip; the lead suit could only be learned by
+	# picking an illegal card and being told off.
+	var snapshot: Dictionary = server._build_client_snapshot(srv_room(), human_seat)
+	var s: Dictionary = snapshot["game_state"]
+	s["phase"] = "playing"
+	s["current_lead_suit"] = "hearts"
+	s["trick_is_resolving"] = false
+	s["revealing_trump"] = false
+	snapshot["game_state"] = s
+	room_ui._on_snapshot_received(snapshot)
+	await settle()
+
+	ok(room_ui.lead_label != null and room_ui.lead_suit_icon != null, "the chip carries a lead-suit row")
+	if room_ui.lead_label == null:
+		return
+	ok(str(room_ui.lead_label.text) == "Hearts", "it names the suit that was led")
+	ok(room_ui.lead_suit_icon.visible, "and shows its icon")
+	ok(room_ui.lead_suit_icon.texture != null, "which is a real texture, not a blank slot")
+
+	# Gold while this hand still holds the suit and so must follow it; plain
+	# once it is void and free to play anything.
+	var holds := bool(room_ui._my_hand_has_suit("hearts"))
+	var colour: Color = room_ui.lead_label.get_theme_color("font_color")
+	ok(is_equal_approx(colour.r, room_ui.COL_GOLD.r) == holds, "the suit is highlighted only while this hand is bound to follow it")
+
+	# Between tricks there is nothing to follow yet.
+	var open_snapshot: Dictionary = snapshot.duplicate(true)
+	var open_state: Dictionary = open_snapshot["game_state"]
+	open_state["current_lead_suit"] = ""
+	open_snapshot["game_state"] = open_state
+	room_ui._on_snapshot_received(open_snapshot)
+	await settle()
+	ok(str(room_ui.lead_label.text) == "Open", "with no card led yet the trick reads as open")
+	ok(not room_ui.lead_suit_icon.visible, "and no suit icon is shown")
 
 # --- watching the same table without a seat --------------------------------
 

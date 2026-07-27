@@ -40,6 +40,16 @@ func card_named(card_id: String) -> Node3D:
 			return card
 	return null
 
+func is_inside(node: Node, ancestor: Node) -> bool:
+	if node == null or ancestor == null:
+		return false
+	var walk := node.get_parent()
+	while walk != null:
+		if walk == ancestor:
+			return true
+		walk = walk.get_parent()
+	return false
+
 func hidden_hand(seat: String, count: int) -> Array:
 	var out: Array = []
 	for i in range(count):
@@ -176,7 +186,10 @@ func _run() -> void:
 	ok(str(ui.trump_label.text) == "Spades", "the trump chip names the suit (got '%s')" % str(ui.trump_label.text))
 	ok(ui.trump_suit_icon.visible, "the trump chip shows its suit icon")
 	ok(ui.trump_suit_icon.texture != null, "the trump suit icon has a texture loaded")
-	ok(ui.trump_suit_icon.get_parent() == null or ui.trump_suit_icon.get_parent().get_parent() == ui.trump_panel, "the icon lives inside the trump chip")
+	# Ancestry rather than a fixed nesting depth: what matters is that the icon
+	# is in the chip, not how many containers deep the chip is arranged.
+	ok(is_inside(ui.trump_suit_icon, ui.trump_panel), "the icon lives inside the suit chip")
+	ok(is_inside(ui.lead_suit_icon, ui.trump_panel), "so does the lead-suit icon")
 
 	# --- 4: the reveal ends and the card goes back to its owner's hand ---
 	var stage_four := base_snapshot()
