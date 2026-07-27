@@ -233,7 +233,106 @@ func _run() -> void:
 	await reveal_button_check()
 	await opponent_trump_return_check()
 	await table_signposting_check()
+	await trump_mode_dialog_check()
+	await played_card_team_check()
 	_report()
+
+func trump_mode_dialog_check() -> void:
+	# The trump-mode choice is a decision, not a card play: it belongs in the
+	# middle of the table with the rules of each option spelled out, not as two
+	# unlabelled buttons in the corner of the action bar.
+	await fresh_table()
+
+	var choosing := base_snapshot()
+	choosing["phase"] = "trump_mode_choice"
+	choosing["hands"]["my"] = plain_cards()
+	choosing["choice_time_limit"] = 25.0
+	await push(choosing)
+	await process_frame
+
+	ok(ui.trump_mode_layer != null and is_instance_valid(ui.trump_mode_layer), "the trump choice opens a dialog in the middle")
+	if ui.trump_mode_layer == null:
+		return
+	ok(ui.trump_mode_layer.find_child("TrumpModeBox", true, false) != null, "the dialog has its panel")
+	ok(ui.trump_mode_layer.find_child("ClosedTrumpButton", true, false) != null, "the holder is offered closed trump")
+	ok(ui.trump_mode_layer.find_child("OpenTrumpButton", true, false) != null, "the holder is offered open trump")
+
+	var dimmed := false
+	for child in ui.trump_mode_layer.get_children():
+		if child is ColorRect and (child as ColorRect).color.a > 0.3:
+			dimmed = true
+	ok(dimmed, "the dialog dims the table behind it, like the leave confirmation")
+
+	var explained := 0
+	for label in ui.trump_mode_layer.find_children("*", "Label", true, false):
+		if str((label as Label).text).length() > 60:
+			explained += 1
+	ok(explained >= 2, "each option explains what it does (%d blurbs)" % explained)
+
+	# The server chooses for you if you sit on it, so the dialog says how long.
+	ok(ui.choice_deadline_ms > 0, "the choice is on a countdown")
+	ui._update_choice_countdown()
+	ok(str(ui.trump_mode_countdown.text).contains("seconds left"), "the dialog shows the time remaining (got '%s')" % str(ui.trump_mode_countdown.text))
+	ok(not ui.open_trump_button.visible and not ui.confirm_hidden_trump_button.visible, "the bottom action bar stays clear during the choice")
+
+	# Picking a card to hide happens on the table, so that phase gets the ring
+	# rather than a dialog.
+	var hiding := base_snapshot()
+	hiding["phase"] = "closed_trump_card_choice"
+	hiding["hands"]["my"] = plain_cards()
+	await push(hiding)
+	await process_frame
+	ok(ui.trump_mode_layer == null, "the dialog closes once the mode is chosen")
+	ok(str(ui.timer_view) == "my", "the card choice is timed at the holder's seat")
+	ok(is_equal_approx(ui.turn_time_limit_active, ui.choice_time_limit), "the card choice uses the choice deadline, not the turn deadline")
+	ok(ui.confirm_hidden_trump_button.visible, "the hide button is offered")
+
+	# That button is the only one showing, so it has to be centred.
+	var bar_centre: float = ui.action_bar.global_position.x + ui.action_bar.size.x * 0.5
+	var button_centre: float = ui.confirm_hidden_trump_button.global_position.x + ui.confirm_hidden_trump_button.size.x * 0.5
+	ok(absf(bar_centre - button_centre) < 2.0, "a lone action button is centred (%.0f vs %.0f)" % [button_centre, bar_centre])
+
+func played_card_team_check() -> void:
+	# A coloured border around each played card, so a 6- or 8-player trick can
+	# be read at a glance: blue came from your side, red from theirs.
+	await fresh_table()
+
+	var snapshot := base_snapshot()
+	snapshot["hands"]["my"] = plain_cards()
+	snapshot["hands"]["right"] = hidden_hand("seat_1", 2)
+	snapshot["hands"]["top"] = hidden_hand("seat_2", 2)
+	snapshot["current_lead_suit"] = "hearts"
+	snapshot["current_turn_index"] = 0
+	snapshot["trick_cards"] = [
+		{"seat": "top", "seat_id": "seat_2", "card_id": "mate", "id": 31, "suit": "hearts", "rank": "9"},
+		{"seat": "right", "seat_id": "seat_1", "card_id": "rival", "id": 32, "suit": "hearts", "rank": "4"}
+	]
+	await push(snapshot)
+	await process_frame
+
+	ok(ui.trick_entries.size() == 2, "both played cards are on the table")
+	var mate_glow: MeshInstance3D = null
+	var rival_glow: MeshInstance3D = null
+	for entry in ui.trick_entries:
+		var node: Node3D = entry["node"]
+		var glow: MeshInstance3D = node.get_node_or_null("TeamGlow")
+		if str(entry["card_id"]) == "mate":
+			mate_glow = glow
+		elif str(entry["card_id"]) == "rival":
+			rival_glow = glow
+
+	ok(mate_glow != null, "a played card carries a team border")
+	ok(rival_glow != null, "the opponent's played card carries one too")
+	if mate_glow == null or rival_glow == null:
+		return
+
+	var mate_color: Color = (mate_glow.material_override as StandardMaterial3D).albedo_color
+	var rival_color: Color = (rival_glow.material_override as StandardMaterial3D).albedo_color
+	ok(mate_color.b > mate_color.r, "a partner's card is bordered towards blue")
+	ok(rival_color.r > rival_color.b, "an opponent's card is bordered towards red")
+
+	var quad: QuadMesh = mate_glow.mesh as QuadMesh
+	ok(quad != null and quad.size.x > ui.CARD_W, "the border is larger than the card so its edge shows")
 
 func fresh_table() -> void:
 	if ui != null and is_instance_valid(ui):

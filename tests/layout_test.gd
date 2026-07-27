@@ -292,9 +292,12 @@ func measure(player_count: int) -> void:
 	for view in room_ui.nameplates.keys():
 		plates.append(plate_rect(str(view)))
 
+	# The bottom buttons live in a centred bar now, so the bar is what has a
+	# meaningful anchored rect; its children are laid out by the container.
 	var buttons: Array = []
-	for control in [room_ui.play_button, room_ui.arrange_button, room_ui.confirm_hidden_trump_button, room_ui.open_trump_button, room_ui.leave_button]:
+	for control in [room_ui.action_bar, room_ui.arrange_button, room_ui.leave_button]:
 		buttons.append(control_rect(control))
+	ok(absf(control_rect(room_ui.action_bar).get_center().x - VIEW.x * 0.5) < 1.0, "the action bar is centred on the screen")
 
 	var score_panel := [control_rect(room_ui.score_panel)]
 	var trump_chip := [control_rect(room_ui.trump_panel)]

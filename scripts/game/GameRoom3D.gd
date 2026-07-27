@@ -34,6 +34,9 @@ const BOTTOM_GAP_DEG := 78.0
 # The local hand is drawn slightly larger than the rest of the table: it is the
 # only one whose faces have to be read.
 const MY_CARD_SCALE := 1.16
+
+# How far the team-coloured border sticks out past a played card.
+const TEAM_GLOW_SCALE := 1.16
 const TRICK_RING_CENTER := Vector3(0, 1, -0.10)
 const TRICK_RING_RX := 1.10
 const TRICK_RING_RZ := 0.60
@@ -165,6 +168,7 @@ var my_hand_sorted: bool = false
 var timer_active: bool = false
 var timer_view: String = ""          # which seat the ring is counting down for
 var turn_time_limit: float = TURN_TIME_LIMIT
+var turn_time_limit_active: float = TURN_TIME_LIMIT
 var time_left: float = 0.0
 var timer_token: int = 0
 var timer_pulse_t: float = 0.0
@@ -186,6 +190,14 @@ var is_host: bool = false
 var next_game_deadline_ms: int = 0
 var countdown_panel: PanelContainer = null
 var countdown_label: Label = null
+var action_bar: HBoxContainer = null
+var reveal_glow_style: StyleBoxFlat = null
+var reveal_pulse_t: float = 0.0
+var trump_mode_layer: Control = null
+var trump_mode_countdown: Label = null
+var choice_deadline_ms: int = 0
+var choice_deadline_phase: String = ""
+var choice_time_limit: float = 25.0
 var match_over_layer: Control = null
 var leave_confirm_layer: Control = null
 
@@ -208,6 +220,7 @@ func _ready() -> void:
 
 	_build_status_ui()
 	_build_countdown_ui()
+	_build_action_bar()
 	_ensure_nameplates()
 
 	play_button.pressed.connect(_on_play_button_pressed)
@@ -430,22 +443,29 @@ func _trick_ring_size() -> Vector2:
 	# local hand - so width does most of the work.
 	match current_player_count:
 		6:
-			return Vector2(1.62, 0.75)
+			return Vector2(1.75, 0.76)
 		8:
-			return Vector2(2.05, 0.55)
+			return Vector2(2.15, 0.60)
 		_:
 			return Vector2(TRICK_RING_RX, TRICK_RING_RZ)
 
 func _trick_card_scale() -> float:
-	# Played cards shrink at a crowded table. They are face up and only need to
-	# be identified, not read from across the room.
+	# Played cards have to be read, so they stay close to full size. Dropping
+	# the tilt below (which cost 40% of a card's width in projection) is what
+	# buys the room for that at 6 and 8 players.
 	match current_player_count:
 		6:
-			return 0.82
+			return 0.92
 		8:
-			return 0.70
+			return 0.95
 		_:
 			return 1.0
+
+func _trick_tilt() -> float:
+	# A little scatter looks natural at a 4-player table. With 6 or 8 cards in
+	# the middle it just makes them harder to read and wastes the space they
+	# need, so they go down square.
+	return 14.0 if current_player_count == 4 else 0.0
 
 func _trick_angle(view_name: String) -> float:
 	# Unlike the seats, the trick spreads evenly over the whole circle: it does
@@ -461,7 +481,7 @@ func _trick_slot_position(view_name: String) -> Vector3:
 	return TRICK_RING_CENTER + Vector3(cos(theta) * ring.x, 0.0, sin(theta) * ring.y)
 
 func _play_rotation(view_name: String) -> Vector3:
-	return Vector3(90.0, 0.0, -20.0 * cos(_trick_angle(view_name)))
+	return Vector3(90.0, 0.0, -_trick_tilt() * cos(_trick_angle(view_name)))
 
 func _my_hand_transform(index: int, count: int) -> Dictionary:
 	# The fan is deliberately narrow and shallow: a wider one ran into the
@@ -545,6 +565,32 @@ func _new_card(card_data: Dictionary, face_up: bool, at_position: Vector3) -> No
 	card.set_face_up(face_up)
 	card.clickable = false
 	return card
+
+func _attach_team_glow(card: Node3D, view_name: String) -> void:
+	# A tinted quad a hair behind the card face, slightly larger, so a coloured
+	# edge shows all the way round it. Blue means the card came from your side
+	# of the table, red from the opposition - which is the only quick way to
+	# read a 6- or 8-player trick.
+	if card.has_node("TeamGlow"):
+		return
+	var glow := MeshInstance3D.new()
+	glow.name = "TeamGlow"
+	var quad := QuadMesh.new()
+	quad.size = Vector2(CARD_W * TEAM_GLOW_SCALE, CARD_H * TEAM_GLOW_SCALE)
+	glow.mesh = quad
+
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var tint := _team_color(view_name)
+	material.albedo_color = Color(tint.r, tint.g, tint.b, 0.9)
+	glow.material_override = material
+
+	# The card's own face sits at local z 0.006, so this stays just behind it
+	# and only the overhanging border is visible.
+	glow.position = Vector3(0, 0, 0.014)
+	card.add_child(glow)
 
 func _tween_card(card: Node3D, target_pos: Vector3, target_rot: Vector3, duration: float, delay: float = 0.0) -> Tween:
 	# Created on the card so the tween dies with it instead of writing to a
@@ -969,6 +1015,7 @@ func _animate_single_play(entry: Dictionary) -> void:
 	# Only the local hand is drawn oversized; played cards shrink at a
 	# crowded table so the trick stays readable.
 	card.scale = Vector3.ONE * _trick_card_scale()
+	_attach_team_glow(card, view_name)
 
 	var tween := _tween_card(card, _trick_slot_position(view_name), _play_rotation(view_name), PLAY_TIME)
 	trick_entries.append({"seat": view_name, "card_id": card_id, "node": card})
@@ -1008,6 +1055,7 @@ func _animate_trick_capture(previous: Dictionary, target: Dictionary) -> void:
 			var node := _new_card(entry, true, _trick_slot_position(view_name))
 			node.rotation_degrees = _play_rotation(view_name)
 			node.scale = Vector3.ONE * _trick_card_scale()
+			_attach_team_glow(node, view_name)
 			node.played = true
 			moving.append(node)
 	for leftover in rendered.values():
@@ -1215,6 +1263,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 		var card := _new_card(entry, true, _trick_slot_position(view_name))
 		card.rotation_degrees = _play_rotation(view_name)
 		card.scale = Vector3.ONE * _trick_card_scale()
+		_attach_team_glow(card, view_name)
 		card.played = true
 		trick_entries.append({"seat": view_name, "card_id": str(entry.get("card_id", "")), "node": card})
 
@@ -1409,6 +1458,8 @@ func _place_claimed_draw_card(card_state: Dictionary, animate: bool) -> void:
 
 func _on_dealer_draw_updated(match_data: Dictionary) -> void:
 	phase = str(match_data.get("phase", phase))
+	choice_time_limit = maxf(1.0, float(match_data.get("choice_time_limit", choice_time_limit)))
+	_arm_choice_deadline(phase)
 	dealer_draw_cards = (match_data.get("dealer_draw_cards", []) as Array).duplicate(true)
 	trump_holder_abs_seat_id = str(match_data.get("trump_holder_seat_id", trump_holder_abs_seat_id))
 	var dealer_abs := str(match_data.get("dealer_seat_id", ""))
@@ -1427,21 +1478,120 @@ func _on_dealer_draw_updated(match_data: Dictionary) -> void:
 func _on_trump_mode_choice_requested(match_data: Dictionary) -> void:
 	_on_dealer_draw_updated(match_data)
 	phase = "trump_mode_choice"
+	_arm_choice_deadline(phase)
 	_show_trump_mode_choice()
 
+func _hide_trump_mode_choice() -> void:
+	if trump_mode_layer != null and is_instance_valid(trump_mode_layer):
+		trump_mode_layer.queue_free()
+	trump_mode_layer = null
+	trump_mode_countdown = null
+
+func _trump_option(title: String, blurb: String, accent: bool, on_pressed: Callable) -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	column.custom_minimum_size = Vector2(280, 0)
+
+	var button := Button.new()
+	button.name = title.replace(" ", "") + "Button"
+	button.text = title
+	button.custom_minimum_size = Vector2(280, 54)
+	if accent:
+		button.theme_type_variation = &"AccentButton"
+	button.pressed.connect(on_pressed)
+	column.add_child(button)
+
+	var note := _hud_label(blurb, 14, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	note.custom_minimum_size = Vector2(280, 0)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(note)
+	return column
+
 func _show_trump_mode_choice() -> void:
-	if _is_local_trump_holder():
-		_set_phase_message("You choose: Closed Trump or Open Trump")
-		confirm_hidden_trump_button.text = "Closed Trump"
-		confirm_hidden_trump_button.visible = true
-		confirm_hidden_trump_button.disabled = false
-		open_trump_button.text = "Open Trump"
-		open_trump_button.visible = true
-		open_trump_button.disabled = false
+	# The bottom row is for playing cards; a decision this important gets the
+	# middle of the table, with the rules of each option spelled out.
+	confirm_hidden_trump_button.visible = false
+	open_trump_button.visible = false
+	play_button.visible = false
+
+	if trump_mode_layer != null and is_instance_valid(trump_mode_layer):
+		return
+
+	var mine := _is_local_trump_holder()
+
+	var layer := Control.new()
+	layer.name = "TrumpModeChoice"
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(layer)
+	trump_mode_layer = layer
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(center)
+
+	var card := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.06, 0.12, 0.09, 0.98)
+	style.border_color = Color(0.24, 0.35, 0.29)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(18)
+	style.content_margin_left = 34
+	style.content_margin_right = 34
+	style.content_margin_top = 26
+	style.content_margin_bottom = 26
+	card.add_theme_stylebox_override("panel", style)
+	center.add_child(card)
+
+	var box := VBoxContainer.new()
+	box.name = "TrumpModeBox"
+	box.add_theme_constant_override("separation", 8)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(box)
+
+	if mine:
+		box.add_child(_hud_label("CHOOSE THE TRUMP", 28, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+		box.add_child(_hud_label("You were served first, so the trump is yours to set.", 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
+
+		var spacer := Control.new()
+		spacer.custom_minimum_size = Vector2(0, 12)
+		box.add_child(spacer)
+
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 18)
+		box.add_child(row)
+
+		row.add_child(_trump_option(
+			"Closed Trump",
+			"Set one card from your first batch aside, face down. Nobody sees it, not even you. Anyone who cannot follow suit may reveal it later.",
+			true, func(): _choose_trump_mode("hidden")))
+		row.add_child(_trump_option(
+			"Open Trump",
+			"No card is set aside. The first time a player cannot follow suit, whatever suit they play becomes the trump.",
+			false, func(): _choose_trump_mode("open")))
 	else:
-		_set_phase_message("Waiting for %s to choose the trump mode" % _display_name(_trump_holder_view()))
-		confirm_hidden_trump_button.visible = false
-		open_trump_button.visible = false
+		box.add_child(_hud_label("CHOOSING THE TRUMP", 24, COL_GOLD, HORIZONTAL_ALIGNMENT_CENTER))
+		var waiting := _hud_label("%s was served first and is setting the trump." % _display_name(_trump_holder_view()), 17, COL_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+		waiting.custom_minimum_size = Vector2(420, 0)
+		waiting.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(waiting)
+
+	trump_mode_countdown = _hud_label("", 16, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(trump_mode_countdown)
+
+func _choose_trump_mode(mode: String) -> void:
+	NetworkManager.choose_trump_mode(mode)
+	if trump_mode_layer != null and is_instance_valid(trump_mode_layer):
+		for button in trump_mode_layer.find_children("*", "Button", true, false):
+			(button as Button).disabled = true
 
 # =========================================================================
 # HUD
@@ -1740,6 +1890,9 @@ func _refresh_buttons() -> void:
 	var choosing_card := phase == "closed_trump_card_choice" and _is_local_trump_holder()
 	var playing := phase == "playing" and my_turn and _can_interact()
 
+	if not choosing_mode:
+		_hide_trump_mode_choice()
+
 	if choosing_mode:
 		_show_trump_mode_choice()
 		play_button.visible = false
@@ -1839,6 +1992,8 @@ func _sync_result_state(target: Dictionary) -> void:
 	var new_phase := str(target.get("phase", ""))
 	is_host = bool(target.get("is_host", is_host))
 	turn_time_limit = maxf(1.0, float(target.get("turn_time_limit", turn_time_limit)))
+	choice_time_limit = maxf(1.0, float(target.get("choice_time_limit", choice_time_limit)))
+	_arm_choice_deadline(new_phase)
 
 	if new_phase == "game_result":
 		if next_game_deadline_ms == 0:
@@ -1853,6 +2008,29 @@ func _sync_result_state(target: Dictionary) -> void:
 	else:
 		_hide_match_over()
 
+func _arm_choice_deadline(for_phase: String) -> void:
+	# The server gives the trump holder a fixed window and then chooses for
+	# them, so the countdown starts when the phase does.
+	var counts: bool = for_phase == "trump_mode_choice" or for_phase == "closed_trump_card_choice" or for_phase == "dealer_draw"
+	if not counts:
+		choice_deadline_ms = 0
+		return
+	if for_phase != choice_deadline_phase:
+		choice_deadline_phase = for_phase
+		choice_deadline_ms = Time.get_ticks_msec() + int(choice_time_limit * 1000.0)
+
+func _update_choice_countdown() -> void:
+	if trump_mode_countdown == null or not is_instance_valid(trump_mode_countdown):
+		return
+	if choice_deadline_ms == 0:
+		trump_mode_countdown.text = ""
+		return
+	var left := float(choice_deadline_ms - Time.get_ticks_msec()) / 1000.0
+	if left <= 0.0:
+		trump_mode_countdown.text = "Choosing for you..."
+		return
+	trump_mode_countdown.text = "%d seconds left" % int(ceil(left))
+
 func _update_next_game_countdown() -> void:
 	if next_game_deadline_ms == 0:
 		return
@@ -1862,6 +2040,54 @@ func _update_next_game_countdown() -> void:
 		return
 	countdown_panel.visible = true
 	countdown_label.text = "NEXT GAME IN  %d" % int(ceil(left))
+
+func _build_action_bar() -> void:
+	# The bottom buttons used to be pinned to fixed offsets designed for two
+	# side by side, so a single button (Hide This Card) sat off to the left of
+	# the hand. They now live in a centred row and re-centre themselves
+	# whenever the set of visible buttons changes.
+	action_bar = HBoxContainer.new()
+	action_bar.name = "ActionBar"
+	action_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	action_bar.add_theme_constant_override("separation", 14)
+	action_bar.anchor_left = 0.5
+	action_bar.anchor_right = 0.5
+	action_bar.anchor_top = 1.0
+	action_bar.anchor_bottom = 1.0
+	action_bar.offset_left = -320.0
+	action_bar.offset_right = 320.0
+	action_bar.offset_top = -72.0
+	action_bar.offset_bottom = -22.0
+	action_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(action_bar)
+
+	for button in [confirm_hidden_trump_button, play_button, open_trump_button]:
+		button.get_parent().remove_child(button)
+		button.custom_minimum_size = Vector2(190, 50)
+		button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		action_bar.add_child(button)
+
+	# The reveal is a rare, high-stakes option, so it is the one button on the
+	# table that glows for attention.
+	reveal_glow_style = StyleBoxFlat.new()
+	reveal_glow_style.set_corner_radius_all(12)
+	reveal_glow_style.content_margin_left = 20
+	reveal_glow_style.content_margin_right = 20
+	reveal_glow_style.content_margin_top = 12
+	reveal_glow_style.content_margin_bottom = 12
+	for state in ["normal", "hover", "pressed"]:
+		open_trump_button.add_theme_stylebox_override(state, reveal_glow_style)
+	open_trump_button.add_theme_color_override("font_color", Color(0.16, 0.11, 0.02))
+	open_trump_button.add_theme_color_override("font_hover_color", Color(0.10, 0.07, 0.01))
+
+func _update_reveal_glow(delta: float) -> void:
+	if reveal_glow_style == null or not open_trump_button.visible:
+		return
+	reveal_pulse_t += delta
+	var beat: float = 0.5 + 0.5 * absf(sin(reveal_pulse_t * 3.2))
+	reveal_glow_style.bg_color = Color(0.98, 0.72, 0.20).lerp(Color(1.0, 0.90, 0.45), beat)
+	reveal_glow_style.set_border_width_all(int(round(2.0 + 2.0 * beat)))
+	reveal_glow_style.border_color = Color(1.0, 0.96, 0.72, 0.35 + 0.55 * beat)
 
 func _build_countdown_ui() -> void:
 	countdown_panel = PanelContainer.new()
@@ -2198,19 +2424,33 @@ func _turn_timer_position(view_name: String, camera: Camera3D) -> Vector2:
 	return pos
 
 func _refresh_turn_timer() -> void:
-	# The ring follows whoever is on turn, so the wait is visible from every
-	# seat rather than only when it is your own move.
-	var turn_view := _current_turn_view()
-	var should_run := phase == "playing" and turn_view != "" and not table_busy
-	if should_run and (not timer_active or turn_view != timer_view):
-		timer_view = turn_view
+	# The ring follows whoever the table is waiting on: the player on turn, the
+	# player still to pick a dealer-draw card, or the trump holder choosing
+	# which card to hide. Every one of those has a server deadline behind it.
+	var view := ""
+	var limit := turn_time_limit
+	match phase:
+		"playing":
+			view = _current_turn_view()
+		"dealer_draw":
+			if dealer_draw_selected == -1:
+				view = "my"
+				limit = choice_time_limit
+		"closed_trump_card_choice":
+			view = _trump_holder_view()
+			limit = choice_time_limit
+
+	var should_run := view != "" and not table_busy
+	if should_run and (not timer_active or view != timer_view or not is_equal_approx(limit, turn_time_limit_active)):
+		timer_view = view
+		turn_time_limit_active = limit
 		_start_turn_timer()
 	elif not should_run and timer_active:
 		_stop_turn_timer()
 
 func _start_turn_timer() -> void:
 	timer_active = true
-	time_left = turn_time_limit
+	time_left = turn_time_limit_active
 	timer_token += 1
 	if timer_fade_tween != null:
 		timer_fade_tween.kill()
@@ -2235,6 +2475,8 @@ func _process(delta: float) -> void:
 	turn_pulse_t += delta
 	_update_nameplates()
 	_update_next_game_countdown()
+	_update_choice_countdown()
+	_update_reveal_glow(delta)
 
 	if not timer_active:
 		return
@@ -2246,7 +2488,7 @@ func _process(delta: float) -> void:
 		turn_timer_widget.position = _turn_timer_position(timer_view, camera)
 
 	turn_timer_text.text = str(int(ceil(time_left)))
-	turn_timer_ring.value = clampf(time_left / turn_time_limit, 0.0, 1.0) * 100.0
+	turn_timer_ring.value = clampf(time_left / turn_time_limit_active, 0.0, 1.0) * 100.0
 	var color := Color(0.2, 1.0, 0.2).lerp(Color(1.0, 0.2, 0.2), clampf((5.0 - time_left) / 5.0, 0.0, 1.0))
 	turn_timer_text.modulate = color
 	turn_timer_ring.tint_progress = color

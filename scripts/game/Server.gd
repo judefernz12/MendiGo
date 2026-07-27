@@ -645,6 +645,7 @@ func _build_client_snapshot(room: Dictionary, target_seat_id: String) -> Diction
 		"next_game_delay": COURT_RESULT_DELAY_S if bool((state.get("last_game_result", {}) as Dictionary).get("court", false)) else NEXT_GAME_DELAY_S,
 		"is_host": _host_seat_id(room) == target_seat_id,
 		"turn_time_limit": TURN_DEADLINE_S,
+		"choice_time_limit": CHOICE_DEADLINE_S,
 		"hands": hands_by_view,
 		"trick_cards": trick_by_view
 	}
@@ -1188,7 +1189,8 @@ func _broadcast_dealer_draw(code: String) -> void:
 		"dealer_draw_cards": room.get("dealer_draw_cards", []),
 		"dealer_seat_id": room.get("dealer_seat_id", ""),
 		"trump_holder_seat_id": room.get("trump_holder_seat_id", ""),
-		"trump_mode": room.get("trump_mode", "")
+		"trump_mode": room.get("trump_mode", ""),
+		"choice_time_limit": CHOICE_DEADLINE_S
 	}
 
 	for p_raw in room.get("players", []):

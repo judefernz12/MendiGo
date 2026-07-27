@@ -107,6 +107,16 @@ Reading the table at a glance:
 - the seat on turn gets a thick gold ring around its plate that breathes, and
   the countdown ring moves to that seat, so whose turn it is reads from
   anywhere on the table instead of only from the colour of the name
+- the countdown ring also runs during the dealer draw and while the trump
+  holder picks a card to hide - both have a 25 s server deadline behind them,
+  and both used to run silently
+- the trump-mode choice is a dialog in the middle of the table over a dimmed
+  background, spelling out what closed and open trump each mean, with the time
+  remaining. Other players see who is choosing. It used to be two unlabelled
+  buttons in the bottom corner
+- the bottom buttons sit in a centred bar, so a single button (Hide This Card)
+  is centred under the hand instead of pinned to a slot meant for two
+- Reveal Trump is the one button that glows, since it is rare and easy to miss
 - between games a countdown sits in the middle of the table ("NEXT GAME IN 5")
 - when the match is won, a full screen shows the winner and the final score,
   with Play Again for the host and Back to Menu for everyone
@@ -144,9 +154,14 @@ Notable consequences of that check:
 - everyone except the local player is spread over the arc left once a
   78-degree gap is kept clear around the bottom. Spreading all seats evenly
   put a neighbour right beside the local hand at 6 and 8 players
-- the trick has its own even spread over the whole circle, its own ring size
-  and its own card scale (1.0 / 0.82 / 0.70): with 8 cards to place it cannot
-  afford the bottom gap, and full-size cards covered each other
+- the trick has its own even spread over the whole circle and its own ring
+  size: with 8 cards to place it cannot afford the bottom gap
+- played cards are laid down square at 6 and 8 players. The scatter tilt costs
+  about 40% of a card's width in projection, which is what forced them small;
+  dropping it takes them from 0.70/0.82 back up to 0.95/0.92 of full size
+- each played card carries a team-tinted border (a slightly larger quad just
+  behind its face), so a crowded trick can be read at a glance: blue came from
+  your side, red from theirs
 - the table is a stadium (a slab with round caps), not an ellipse - a 1.85:1
   ellipse reads as a stretched circle. Felt, rim and floor are three meshes at
   the card plane's depth so the rim shows all the way round
