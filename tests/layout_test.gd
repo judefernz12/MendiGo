@@ -354,6 +354,16 @@ func measure(player_count: int) -> void:
 		for r in rects_of(room_ui.pile_ten_nodes[team]):
 			tens.append(r)
 
+	# Whether a 10 has actually been captured by the time this runs is down to
+	# how the test's game happened to go, which would make every check against
+	# them optional. Add all four slots for both teams so the worst case is
+	# always measured.
+	var ten_slots: Array = []
+	for team in ["A", "B"]:
+		for i in range(4):
+			ten_slots.append(card_rect_at(room_ui._pile_ten_position(team, i)))
+	tens.append_array(ten_slots)
+
 	var trump_slot: Array = []
 	if room_ui.hidden_trump_node != null and is_instance_valid(room_ui.hidden_trump_node):
 		trump_slot.append(card_rect(room_ui.hidden_trump_node))
@@ -374,9 +384,10 @@ func measure(player_count: int) -> void:
 
 	var score_panel := [control_rect(room_ui.score_panel)]
 	var trump_chip := [control_rect(room_ui.trump_panel)]
+	var lead_chip := [control_rect(room_ui.lead_panel)]
 	var banner := [control_rect(room_ui.phase_message_panel)]
 	var countdown := [control_rect(room_ui.countdown_panel)]
-	var panels: Array = score_panel + trump_chip + banner
+	var panels: Array = score_panel + trump_chip + lead_chip + banner
 
 	# --- the local hand owns the bottom of the screen -------------------------
 	none_clash(my_cards, piles, "the local hand does not sit on a captured pile")
@@ -410,6 +421,8 @@ func measure(player_count: int) -> void:
 	none_clash(tens, panels, "the captured 10s do not sit under a HUD panel")
 	none_clash(piles, panels, "the captured piles do not sit under a HUD panel")
 	none_clash(trump_chip, buttons, "the trump chip does not overlap the action buttons")
+	none_clash(lead_chip, buttons, "the lead chip clears the leave button it sits under")
+	none_clash(lead_chip, trump_slot, "the lead chip does not cover the hidden trump slot")
 	no_self_clash(panels, "the HUD panels do not overlap each other")
 	none_clash(opponent_cards, panels, "no HUD panel covers the opponents' cards")
 	none_clash(opponent_cards, trick_cards, "the opponents' cards do not sit on the trick")

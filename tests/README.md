@@ -59,9 +59,10 @@ correctly. It feeds real server snapshots into the real game scene and checks:
 - a court raises the celebration overlay with its banner and confetti, the
   result chip and banner message both say COURT, resending the same result
   does not stack a second overlay, and a new game re-arms it
-- the suit chip names the suit led this trick, with its icon, highlighted only
+- the lead chip names the suit led this trick, with its icon, highlighted only
   while this hand still holds that suit and is therefore bound to follow it,
-  and reading "Open" with no icon before anyone has played
+  and reading "Open" with no icon before anyone has played. It is its own chip:
+  the trump chip is left exactly as it was
 - a watcher gets a nameplate for every seat, the bottom one included, showing
   that player's real name - it used to be skipped, because for a player the
   bottom seat is themselves, which was the one missing name tag

@@ -188,8 +188,9 @@ func _run() -> void:
 	ok(ui.trump_suit_icon.texture != null, "the trump suit icon has a texture loaded")
 	# Ancestry rather than a fixed nesting depth: what matters is that the icon
 	# is in the chip, not how many containers deep the chip is arranged.
-	ok(is_inside(ui.trump_suit_icon, ui.trump_panel), "the icon lives inside the suit chip")
-	ok(is_inside(ui.lead_suit_icon, ui.trump_panel), "so does the lead-suit icon")
+	ok(is_inside(ui.trump_suit_icon, ui.trump_panel), "the icon lives inside the trump chip")
+	ok(is_inside(ui.lead_suit_icon, ui.lead_panel), "and the lead-suit icon inside its own chip")
+	ok(ui.lead_panel != ui.trump_panel, "the two chips are separate - the trump chip is left as it was")
 
 	# --- 4: the reveal ends and the card goes back to its owner's hand ---
 	var stage_four := base_snapshot()

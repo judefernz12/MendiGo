@@ -181,6 +181,7 @@ var turn_pulse_t: float = 0.0
 var hud_values: Dictionary = {}      # scoreboard cell name -> Label
 var score_panel: PanelContainer = null
 var trump_panel: PanelContainer = null
+var lead_panel: PanelContainer = null
 var lead_suit_icon: TextureRect = null
 var lead_label: Label = null
 var leave_button: Button = null
@@ -389,6 +390,46 @@ func _card_screen_rect(card: Node3D, project: Callable) -> Rect2:
 			rect = rect.expand(point)
 	return rect
 
+func _rect_clashes(rect: Rect2, others: Array) -> bool:
+	# The same tolerance the layout checks use: a few pixels of touching is not
+	# a collision worth moving anything for.
+	for other_raw in others:
+		var hit := rect.intersection(other_raw as Rect2)
+		if hit.size.x > 6.0 and hit.size.y > 6.0:
+			return true
+	return false
+
+func _flat_card_rect(local_position: Vector3, project: Callable) -> Rect2:
+	# A card lying face up on the table, without needing a node for it - used to
+	# reserve the space the captured 10s will occupy before any are captured.
+	var half_w := CARD_W * 0.5
+	var half_h := CARD_H * 0.5
+	var rect := Rect2()
+	var first := true
+	for corner in [Vector3(-half_w, 0, -half_h), Vector3(half_w, 0, -half_h), Vector3(-half_w, 0, half_h), Vector3(half_w, 0, half_h)]:
+		var point: Vector2 = project.call(_to_world(local_position + corner))
+		if first:
+			rect = Rect2(point, Vector2.ZERO)
+			first = false
+		else:
+			rect = rect.expand(point)
+	return rect
+
+func _pile_zone_rects(project: Callable) -> Array:
+	# Everything in the margins that a nameplate must not land on: the two
+	# captured-card columns at the far left and right, and the trick in the
+	# middle. All are reserved whether or not anything has landed in them yet,
+	# so a plate does not take a spot a captured 10 will want three tricks from
+	# now and then have to jump out of.
+	var out: Array = []
+	for team in ["A", "B"]:
+		for i in range(TENS_IN_DECK):
+			out.append(_flat_card_rect(_pile_ten_position(team, i), project))
+		out.append(_flat_card_rect(_pile_position(team, 0), project))
+	for view_raw in seat_order:
+		out.append(_flat_card_rect(_trick_slot_position(str(view_raw)), project))
+	return out
+
 func _seat_screen_rect(view_name: String, project: Callable) -> Rect2:
 	var rect := Rect2()
 	var first := true
@@ -406,7 +447,7 @@ func _seat_screen_rect(view_name: String, project: Callable) -> Rect2:
 		rect = Rect2(fallback, Vector2.ZERO)
 	return rect
 
-func _nameplate_position(view_name: String, project: Callable, plate_size: Vector2, screen: Vector2) -> Vector2:
+func _nameplate_position(view_name: String, project: Callable, plate_size: Vector2, screen: Vector2, avoid: Array = []) -> Vector2:
 	var seat := _seat_screen_rect(view_name, project)
 	var side_offset := seat.get_center().x - screen.x * 0.5
 
@@ -415,11 +456,25 @@ func _nameplate_position(view_name: String, project: Callable, plate_size: Vecto
 		# another seat directly below them, so their name goes beside the cards
 		# in the empty margin rather than under them.
 		var to_right := side_offset > 0.0
-		var x := seat.end.x + NAMEPLATE_GAP if to_right else seat.position.x - NAMEPLATE_GAP - plate_size.x
-		return Vector2(
-			clampf(x, 6.0, maxf(6.0, screen.x - plate_size.x - 6.0)),
-			clampf(seat.get_center().y - plate_size.y * 0.5, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
-		)
+		var y := clampf(seat.get_center().y - plate_size.y * 0.5, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
+		var outer := clampf(seat.end.x + NAMEPLATE_GAP if to_right else seat.position.x - NAMEPLATE_GAP - plate_size.x,
+			6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
+		var inner := clampf(seat.position.x - NAMEPLATE_GAP - plate_size.x if to_right else seat.end.x + NAMEPLATE_GAP,
+			6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
+
+		# Those margins are also where the captured piles and 10s live, and the
+		# inner one runs into the trick on a crowded table. Try the outer side,
+		# then the inner, then slide along the outer side until it is clear.
+		var zones: Array = avoid if not avoid.is_empty() else _pile_zone_rects(project)
+		var candidates: Array = [Vector2(outer, y), Vector2(inner, y)]
+		for step in [1.0, -1.0]:
+			for distance in [0.6, 1.2, 1.8]:
+				candidates.append(Vector2(outer, clampf(y + step * plate_size.y * distance * 2.0, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))))
+		for spot_raw in candidates:
+			var spot: Vector2 = spot_raw
+			if not _rect_clashes(Rect2(spot, plate_size), zones):
+				return spot
+		return Vector2(outer, y)
 
 	# Everyone else sits just under the cards they belong to, stepping past any
 	# other seat's cards that happen to be in the way.
@@ -1723,13 +1778,11 @@ func _build_status_ui() -> void:
 	hud_values["turn"] = turn_value
 	footer.add_child(turn_value)
 
-	# The suit chip in the bottom-right corner: big enough to read at a glance,
-	# next to the hand and the action buttons where the player is already
-	# looking, and out of the far corner it used to hide in. It carries the two
-	# suits that decide what you may play - the trump, and the suit led this
-	# trick, which you must follow if you can.
+	# Trump gets its own chip in the bottom-right corner: big enough to read at
+	# a glance, next to the hand and the action buttons where the player is
+	# already looking, and out of the far corner it used to hide in.
 	trump_panel = PanelContainer.new()
-	trump_panel.name = "SuitChip"
+	trump_panel.name = "TrumpChip"
 	var trump_style := StyleBoxFlat.new()
 	trump_style.bg_color = Color(0.04, 0.09, 0.06, 0.88)
 	trump_style.border_color = Color(0.18, 0.29, 0.23, 0.9)
@@ -1737,35 +1790,30 @@ func _build_status_ui() -> void:
 	trump_style.set_corner_radius_all(14)
 	trump_style.content_margin_left = 14
 	trump_style.content_margin_right = 16
-	trump_style.content_margin_top = 6
-	trump_style.content_margin_bottom = 6
+	trump_style.content_margin_top = 8
+	trump_style.content_margin_bottom = 8
 	trump_panel.add_theme_stylebox_override("panel", trump_style)
 	trump_panel.anchor_left = 1.0
 	trump_panel.anchor_top = 1.0
 	trump_panel.anchor_right = 1.0
 	trump_panel.anchor_bottom = 1.0
 	trump_panel.offset_left = -212.0
-	trump_panel.offset_top = -112.0
+	trump_panel.offset_top = -86.0
 	trump_panel.offset_right = -14.0
 	trump_panel.offset_bottom = -22.0
 	trump_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(trump_panel)
 
-	var chip_column := VBoxContainer.new()
-	chip_column.add_theme_constant_override("separation", 2)
-	chip_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	trump_panel.add_child(chip_column)
-
 	var trump_row := HBoxContainer.new()
 	trump_row.add_theme_constant_override("separation", 10)
-	trump_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	trump_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	trump_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_column.add_child(trump_row)
+	trump_panel.add_child(trump_row)
 
 	# The icon and label live in the scene; move them into the chip so their
 	# layout is container-driven instead of anchored to the screen corner.
 	trump_suit_icon.get_parent().remove_child(trump_suit_icon)
-	trump_suit_icon.custom_minimum_size = Vector2(32, 32)
+	trump_suit_icon.custom_minimum_size = Vector2(40, 40)
 	trump_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	trump_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	trump_row.add_child(trump_suit_icon)
@@ -1779,40 +1827,11 @@ func _build_status_ui() -> void:
 	trump_label.get_parent().remove_child(trump_label)
 	trump_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	trump_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	trump_label.add_theme_font_size_override("font_size", 18)
+	trump_label.add_theme_font_size_override("font_size", 20)
 	trump_label.add_theme_color_override("font_color", COL_GOLD)
 	trump_text.add_child(trump_label)
 
-	var chip_rule := HSeparator.new()
-	chip_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_column.add_child(chip_rule)
-
-	# The suit led this trick. Until now the only way to learn it was to pick an
-	# illegal card and be told off, and it is the other half of "what may I
-	# play?" - the trump beats it, everything else has to follow it.
-	var lead_row := HBoxContainer.new()
-	lead_row.add_theme_constant_override("separation", 10)
-	lead_row.alignment = BoxContainer.ALIGNMENT_BEGIN
-	lead_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_column.add_child(lead_row)
-
-	lead_suit_icon = TextureRect.new()
-	lead_suit_icon.name = "LeadSuitIcon"
-	lead_suit_icon.custom_minimum_size = Vector2(32, 32)
-	lead_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	lead_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	lead_suit_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lead_row.add_child(lead_suit_icon)
-
-	var lead_text := VBoxContainer.new()
-	lead_text.add_theme_constant_override("separation", 0)
-	lead_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lead_row.add_child(lead_text)
-	lead_text.add_child(_hud_label("LEAD", 12, COL_MUTED))
-
-	lead_label = _hud_label("-", 18, COL_MUTED)
-	lead_label.name = "LeadSuitLabel"
-	lead_text.add_child(lead_label)
+	_build_lead_chip()
 
 	leave_button = Button.new()
 	leave_button.name = "LeaveButton"
@@ -1939,6 +1958,9 @@ func _update_nameplates() -> void:
 	var turn_view := _current_turn_view()
 	var project := func(world: Vector3) -> Vector2: return camera.unproject_position(world)
 	var screen := get_viewport().get_visible_rect().size
+	# Built once per frame rather than once per plate: it is the same for all
+	# of them and costs a projection per corner of every reserved slot.
+	var zones := _pile_zone_rects(project)
 	for view_name in nameplates.keys():
 		var plate: Label = nameplates[view_name]
 		var p: Dictionary = seat_to_player.get(view_name, {})
@@ -1948,7 +1970,7 @@ func _update_nameplates() -> void:
 		if not bool(p.get("is_connected", true)) and not bool(p.get("is_bot", false)):
 			text += "  [offline]"
 		plate.text = text
-		plate.position = _nameplate_position(view_name, project, plate.size, screen)
+		plate.position = _nameplate_position(view_name, project, plate.size, screen, zones)
 		_style_nameplate(view_name, plate, view_name == turn_view)
 
 func _refresh_hud() -> void:
@@ -2055,6 +2077,61 @@ func _refresh_trump_label() -> void:
 		trump_label.text = "Not set"
 		trump_label.add_theme_color_override("font_color", COL_MUTED)
 
+func _build_lead_chip() -> void:
+	# The suit led this trick, in the top-right corner under the Leave button.
+	# It belongs with the trump - together they decide what may be played - but
+	# the trump chip is already the right size for the bottom corner, and
+	# growing it into two rows made a mess of it.
+	lead_panel = PanelContainer.new()
+	lead_panel.name = "LeadChip"
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.04, 0.09, 0.06, 0.88)
+	style.border_color = Color(0.18, 0.29, 0.23, 0.9)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(14)
+	style.content_margin_left = 12
+	style.content_margin_right = 14
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
+	lead_panel.add_theme_stylebox_override("panel", style)
+	lead_panel.anchor_left = 1.0
+	lead_panel.anchor_top = 0.0
+	lead_panel.anchor_right = 1.0
+	lead_panel.anchor_bottom = 0.0
+	# Under the Leave button, but shifted left of it: directly below sits the
+	# opposing team's captured 10s (x 1189-1256, y 81-271 at 1280x720), which
+	# leaves only a 31 px band there - not enough for a readable chip.
+	lead_panel.offset_left = -280.0
+	lead_panel.offset_top = 56.0
+	lead_panel.offset_right = -120.0
+	lead_panel.offset_bottom = 108.0
+	lead_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(lead_panel)
+
+	var lead_row := HBoxContainer.new()
+	lead_row.add_theme_constant_override("separation", 10)
+	lead_row.alignment = BoxContainer.ALIGNMENT_BEGIN
+	lead_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lead_panel.add_child(lead_row)
+
+	lead_suit_icon = TextureRect.new()
+	lead_suit_icon.name = "LeadSuitIcon"
+	lead_suit_icon.custom_minimum_size = Vector2(32, 32)
+	lead_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	lead_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	lead_suit_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lead_row.add_child(lead_suit_icon)
+
+	var lead_text := VBoxContainer.new()
+	lead_text.add_theme_constant_override("separation", 0)
+	lead_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lead_row.add_child(lead_text)
+	lead_text.add_child(_hud_label("LEAD", 11, COL_MUTED))
+
+	lead_label = _hud_label("-", 18, COL_MUTED)
+	lead_label.name = "LeadSuitLabel"
+	lead_text.add_child(lead_label)
+
 func _suit_icon(suit: String) -> Texture2D:
 	if suit == "":
 		return null
@@ -2069,8 +2146,11 @@ func _refresh_trump_icon() -> void:
 	trump_suit_icon.visible = icon != null
 
 func _refresh_lead_chip() -> void:
-	# Only meaningful while a trick is actually being played; between tricks
-	# there is nothing to follow yet.
+	# The whole chip only means anything during play; the rest of the time
+	# there is no trick to follow, so it stays out of the corner entirely.
+	if lead_panel != null and is_instance_valid(lead_panel):
+		lead_panel.visible = phase == "playing"
+
 	var showing := phase == "playing" and lead_suit != ""
 	var icon := _suit_icon(lead_suit) if showing else null
 	if lead_suit_icon != null and is_instance_valid(lead_suit_icon):

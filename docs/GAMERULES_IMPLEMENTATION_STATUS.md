@@ -140,23 +140,27 @@ Reading the table at a glance:
 - when the match is won, a full screen shows the winner and the final score,
   with Play Again for the host and Back to Menu for everyone
 
-Three HUD anchors, one job each. Top left: the match panel - a labelled grid
+Four HUD anchors, one job each. Top left: the match panel - a labelled grid
 with a row per team giving score, 10s (shown as `n / 4` against the court
 target, highlighting as a team closes in) and tricks, then the dealer and whose
-turn it is. Bottom right: the suit chip, next to the hand and the action buttons
-where the player is already looking. Top centre: the message banner, which also
-carries the game result coloured by who won, so there is no separate result
-chip.
+turn it is. Bottom right: the trump chip - a 40 px suit icon and the suit name,
+next to the hand and the action buttons where the player is already looking (it
+reads "Not set" in grey until the trump is decided). Top right, under the Leave
+button: the lead chip. Top centre: the message banner, which also carries the
+game result coloured by who won, so there is no separate result chip.
 
-The suit chip carries both suits that decide what you may play, each as an icon
-and a name:
+The lead chip names the suit led this trick, which you must follow if you hold
+it - the other half of "what may I play?", and until it existed the only way to
+learn it was to pick an illegal card and be told off. It reads "Open" before
+anyone has played, and the suit name is gold while this hand still holds that
+suit (so following is compulsory) and plain once void and free to play anything.
+It only appears during play.
 
-- **TRUMP** - "Not set" in grey until the trump is decided
-- **LEAD** - the suit led this trick, which you must follow if you hold it. It
-  reads "Open" before anyone has played, and the suit name is gold while this
-  hand still holds that suit (so following is compulsory) and plain once it is
-  void and free to play anything. Until this was added, the only way to learn
-  the lead suit was to pick an illegal card and be told off for it.
+It sits left of the Leave button rather than directly beneath it: the space
+directly below is the opposing team's captured-10s column (x 1189-1256,
+y 81-271 at 1280x720), which leaves a 31 px band there - not enough for a
+readable chip. Merging it into the trump chip as a second row was tried first
+and made a mess of the bottom corner.
 
 Table geometry is checked, not eyeballed. `tests/layout_test.gd` projects every
 card and HUD element onto a 1280x720 screen through the real camera and asserts
@@ -173,9 +177,19 @@ Notable consequences of that check:
 - nameplates are placed in screen space, just clear of the projected bounds of
   the cards they belong to, flipping above them if there is no room below.
   They used to be lerped towards the table centre and landed on the cards
+- side-stacked seats put their plate in the margin beside their cards, but that
+  margin is also where the captured piles and 10s go. Those slots are reserved
+  whether or not anything has landed in them yet, so a plate cannot take a spot
+  a captured 10 will want three tricks later and then have to jump out of. If
+  the outer margin is spoken for the plate tries the inner side, then slides
+  along the outer side until it is clear
 - the pile's forward step is 0.022 per trick; the old 0.13 walked a full pile
   most of a card-length across the table and off the bottom of the screen
-- captured 10s are laid out in a column on the far side of their pile
+- captured 10s are laid out in a column on the far side of their pile. All four
+  slots for both teams are measured whether or not any have been captured yet -
+  otherwise every check against them was quietly optional, depending on how the
+  test's game happened to go. Making them unconditional immediately turned up
+  an 8-player nameplate sitting on one
 - the seat ring is a wide, flat ellipse centred on the camera axis, so the
   piles and the trump slot get the screen margins and the table sits in the
   middle of the screen. It widens with the player count (RX 2.8/3.3/3.55)
