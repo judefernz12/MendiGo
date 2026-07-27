@@ -63,6 +63,12 @@ correctly. It feeds real server snapshots into the real game scene and checks:
   while this hand still holds that suit and is therefore bound to follow it,
   and reading "Open" with no icon before anyone has played. It is its own chip:
   the trump chip is left exactly as it was
+- both suit icons are measured **as drawn**, and the lead chip is checked
+  against the size its own offsets ask for. The suit art is over 1100 px
+  square and a `TextureRect` treats that as its minimum size unless
+  `expand_mode` is set, so an icon can silently drag its container open;
+  `custom_minimum_size` will not stop it, and the layout suite measures panels
+  from their anchors so it cannot see it happen
 - a watcher gets a nameplate for every seat, the bottom one included, showing
   that player's real name - it used to be skipped, because for a player the
   bottom seat is themselves, which was the one missing name tag

@@ -2104,7 +2104,7 @@ func _build_lead_chip() -> void:
 	lead_panel.offset_left = -280.0
 	lead_panel.offset_top = 56.0
 	lead_panel.offset_right = -120.0
-	lead_panel.offset_bottom = 108.0
+	lead_panel.offset_bottom = 114.0
 	lead_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(lead_panel)
 
@@ -2116,6 +2116,11 @@ func _build_lead_chip() -> void:
 
 	lead_suit_icon = TextureRect.new()
 	lead_suit_icon.name = "LeadSuitIcon"
+	# The suit art is over 1100 px square. Without this the TextureRect reports
+	# that as its minimum size and the chip is dragged open to fit it -
+	# custom_minimum_size is a floor, not a ceiling. The trump icon gets away
+	# with the same custom_minimum_size only because the scene sets this on it.
+	lead_suit_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	lead_suit_icon.custom_minimum_size = Vector2(32, 32)
 	lead_suit_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	lead_suit_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER

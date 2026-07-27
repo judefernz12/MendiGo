@@ -162,6 +162,17 @@ y 81-271 at 1280x720), which leaves a 31 px band there - not enough for a
 readable chip. Merging it into the trump chip as a second row was tried first
 and made a mess of the bottom corner.
 
+The suit art is over 1100 px square, and a `TextureRect` reports its texture's
+size as its own minimum size unless `expand_mode` says otherwise -
+`custom_minimum_size` is a floor, not a ceiling. The scene sets
+`expand_mode = 1` on the trump icon, which is the only reason a 40 px request
+is honoured there; an icon built in code needs
+`EXPAND_IGNORE_SIZE` set explicitly or it drags its container open to over a
+thousand pixels. `render_test.gd` measures both icons as drawn, and checks the
+chip is still the size its own offsets ask for, because the layout suite
+measures panels from their anchors and cannot see a container stretched by its
+contents.
+
 Table geometry is checked, not eyeballed. `tests/layout_test.gd` projects every
 card and HUD element onto a 1280x720 screen through the real camera and asserts
 that things which must not sit on top of each other do not: the local hand

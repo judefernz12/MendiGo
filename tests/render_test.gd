@@ -398,6 +398,27 @@ func lead_suit_chip_check() -> void:
 	ok(room_ui.lead_suit_icon.visible, "and shows its icon")
 	ok(room_ui.lead_suit_icon.texture != null, "which is a real texture, not a blank slot")
 
+	# The suit art is over 1100 px square. A TextureRect reports its texture's
+	# size as its minimum unless told not to, and custom_minimum_size is a
+	# floor rather than a ceiling - so the icon has to be measured as drawn,
+	# not trusted to be the size it was asked for.
+	await process_frame
+	for pair in [["trump", room_ui.trump_suit_icon], ["lead", room_ui.lead_suit_icon]]:
+		var which := str(pair[0])
+		var icon: TextureRect = pair[1]
+		ok(icon.texture == null or icon.texture.get_width() > 200, "the %s icon really is drawn from oversized art" % which)
+		ok(icon.size.x <= 64.0 and icon.size.y <= 64.0,
+			"the %s icon is drawn at chip size, not the texture's own (got %.0fx%.0f)" % [which, icon.size.x, icon.size.y])
+
+	# And the chip itself must still be the size its offsets ask for. The
+	# layout suite measures panels from their anchors, so a container dragged
+	# open by its own contents is invisible to it - this is where that shows.
+	var chip: Control = room_ui.lead_panel
+	var asked := Vector2(chip.offset_right - chip.offset_left, chip.offset_bottom - chip.offset_top)
+	ok(chip.size.y <= asked.y + 1.0, "the lead chip is not dragged open by its contents (%.0f vs %.0f)" % [chip.size.y, asked.y])
+	ok(chip.size.x <= asked.x + 1.0, "nor stretched sideways by them")
+	ok(room_ui.lead_suit_icon.size.y <= chip.size.y, "the lead icon fits inside its chip")
+
 	# Gold while this hand still holds the suit and so must follow it; plain
 	# once it is void and free to play anything.
 	var holds := bool(room_ui._my_hand_has_suit("hearts"))
