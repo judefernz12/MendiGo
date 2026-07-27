@@ -48,6 +48,8 @@ func _run() -> void:
 	await process_frame
 
 	drop_out_check()
+	lobby_leave_check()
+	mid_match_leave_check()
 	mid_game_join_check()
 	rejoin_entry_check()
 	spectator_check()
@@ -90,6 +92,84 @@ func drop_out_check() -> void:
 	ok(int(back.get("peer_id", -1)) == 12, "reconnecting attaches the new connection")
 	ok(str(back.get("seat_id", "")) == guest_seat, "reconnecting returns to the same seat")
 	ok(not server._seat_is_auto(room(code), guest_seat), "the server hands the seat back")
+	server.rooms.clear()
+
+# --- leaving from the lobby -------------------------------------------------
+
+func lobby_leave_check() -> void:
+	# In the lobby there is no hand to come back to, so a seat held for a
+	# leaver is just a ghost: the room reads as fuller than it is, and the
+	# leaver's own rejoin collides with its stale entry.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true})
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 11)
+	ok(room(code).get("players", []).size() == 2, "two players are in the room")
+
+	server._server_leave_room(code, "guest", 11)
+	ok(player_in(code, "guest").is_empty(), "leaving the lobby removes the player, not just their connection")
+	ok(room(code).get("players", []).size() == 1, "the room shrinks back")
+	ok(not server.peer_to_room.has(11), "their connection is no longer tied to the room")
+
+	# The whole point: they can come straight back under the same name.
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 12)
+	var back := player_in(code, "guest")
+	ok(not back.is_empty(), "they can rejoin the same room afterwards")
+	ok(int(back.get("peer_id", -1)) == 12, "on their new connection")
+	ok(room(code).get("players", []).size() == 2, "and are counted once, not twice")
+
+	# A close that arrives with no warning must behave the same way.
+	server._on_peer_disconnected(12)
+	ok(player_in(code, "guest").is_empty(), "closing the tab in the lobby also removes the player")
+
+	# Seats stay coherent: whoever is left keeps a real, unique seat.
+	server._server_join_room(code, {"id": "a", "name": "A"}, false, 13)
+	server._server_join_room(code, {"id": "b", "name": "B"}, false, 14)
+	server._server_leave_room(code, "a", 13)
+	var seats := {}
+	for p_raw in room(code).get("players", []):
+		var p: Dictionary = p_raw
+		seats[str(p.get("seat_id", ""))] = true
+	ok(seats.size() == room(code).get("players", []).size(), "the remaining players hold distinct seats")
+	ok(not seats.has(""), "and none of them is left without one")
+
+	# Nobody may throw anybody else out.
+	server._server_leave_room(code, "host", 14)
+	ok(not player_in(code, "host").is_empty(), "a player cannot remove somebody else from the room")
+	ok(not player_in(code, "b").is_empty(), "and the impostor is not removed either")
+
+	# The host leaving hands the room over rather than orphaning it.
+	server._server_leave_room(code, "host", 10)
+	ok(player_in(code, "host").is_empty(), "the host can leave the lobby too")
+	ok(server._get_room_host_peer(room(code)) == 14, "the next player inherits the room")
+
+	# The reported symptom: leave, re-dial and rejoin, all faster than a
+	# WebSocket teardown crossing the internet. If the client says nothing, the
+	# room still holds a live entry under that id and refuses the rejoin as a
+	# second window - so the client is told the name is taken.
+	server.rooms.clear()
+	var race := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true})
+	server._server_join_room(race, {"id": "quick", "name": "Quick"}, false, 21)
+	server._server_leave_room(race, "quick", 21)
+	server._server_join_room(race, {"id": "quick", "name": "Quick"}, false, 22)
+	ok(int(player_in(race, "quick").get("peer_id", -1)) == 22, "leaving and rejoining at once is not mistaken for a second window")
+	ok(room(race).get("players", []).size() == 2, "and leaves no ghost behind")
+	server.rooms.clear()
+
+func mid_match_leave_check() -> void:
+	# Mid-match is the opposite case: the cards are dealt, so the seat has to
+	# be held even for a deliberate leave.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true})
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 11)
+	server._server_start_match(code, "host", 10)
+	var guest_seat := str(player_in(code, "guest").get("seat_id", ""))
+
+	server._server_leave_room(code, "guest", 11)
+	var guest := player_in(code, "guest")
+	ok(not guest.is_empty(), "leaving a running game still holds the seat")
+	ok(not bool(guest.get("is_connected", true)), "but marks them away")
+	ok(str(guest.get("seat_id", "")) == guest_seat, "on the same seat, so they can come back to their hand")
+	ok(server._seat_is_auto(room(code), guest_seat), "and the server plays it meanwhile")
 	server.rooms.clear()
 
 # --- joining a game already in progress ------------------------------------

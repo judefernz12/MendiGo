@@ -141,6 +141,14 @@ leaving (the role passes to the next connected player), a short table with bots
 off (refused, with a reason), and everybody leaving (the room is held briefly,
 then closed).
 
+Leaving is covered on both sides of the deal, because the right answer flips.
+From the lobby, leaving must *remove* the player - a held seat there is a ghost
+nobody can come back to, and it is what made a rejoin get refused as a second
+window. Mid-match, the same action must *hold* the seat, because the hand is
+already dealt. The checks also cover a tab closed without warning, seats staying
+distinct after someone goes, the host handing the room over, and the fact that
+no peer can remove anybody but itself.
+
 It also pins down **where a client is sent when it arrives after the lobby**,
 which is the check that would have caught the rejoin bug: `_room_entry_for`
 must return the dealer-draw screen while the dealer is being picked and the

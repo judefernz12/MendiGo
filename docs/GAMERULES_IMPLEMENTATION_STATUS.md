@@ -63,6 +63,9 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Scores carry across games in a match (tested)
 - Server turn deadlines (20 s play, 25 s choices) with autoplay
 - Bots play legal cards after a short think delay
+- Leaving is announced to the server rather than being inferred from a closed
+  socket. From the lobby it removes the player outright, since there is no hand
+  to come back to; once the cards are dealt it holds the seat instead (tested)
 - Seat reservation and full-state resend on reconnect; an absent player's hand
   is played by the server at bot speed rather than stalling on the deadline.
   A reconnecting client is also sent back to the table - the dealer-draw screen

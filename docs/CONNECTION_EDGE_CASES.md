@@ -6,10 +6,29 @@ if any of this stops being true.
 
 ## Handled
 
+### A player leaves from the lobby (tested)
+
+Their entry is **removed**. In the lobby there is no hand to come back to, so a
+held seat is pure ghost: the room reads as fuller than it is, the team columns
+count somebody who has gone, and - the part that actually bit - the leaver's own
+rejoin collided with their stale entry and was refused as a second window,
+telling them the name was already taken.
+
+Leaving is also announced now. It used to be nothing but a closed socket, so the
+server did not find out until the WebSocket teardown crossed the internet. A
+client that left, re-dialled and rejoined did all three faster than that, and so
+arrived *before* its own departure. `_server_leave_room` is sent first and the
+socket closes a moment later, so the order is never in doubt.
+
+A tab closed without warning is handled the same way: any disconnect while the
+room is still in the lobby removes the player rather than reserving a seat.
+
 ### A player leaves or their connection drops mid-match (tested)
 
-Their seat is **held**, not freed. They stay in the room marked
-`is_connected = false`, and the server plays their hand for them.
+Their seat is **held**, not freed - this is the opposite of the lobby case,
+because the cards are already dealt and the hand is theirs. This applies to a
+deliberate leave too: they stay in the room marked `is_connected = false`, and
+the server plays their hand for them.
 
 Before this pass the server did take over, but only through the 20-second turn
 deadline: every one of their turns stalled the whole table for the full 20 s.
@@ -134,14 +153,15 @@ Rooms live in memory. A Render deploy or a crash drops every game in progress.
 **Best fix:** for a hobby deployment, do not fix this - persisting match state
 to a database is a large change for a rare event. Deploy between sessions.
 
-### A player who leaves deliberately still holds their seat
+### A player who leaves a running game still holds their seat
 
-Leaving via the button is treated the same as dropping out, so the seat is held
-for 3 minutes even though they chose to go.
+Leaving mid-match is still treated as dropping out: the seat is held for 3
+minutes even though they chose to go. That is deliberate - the hand is dealt and
+nobody else can be given it - but it does mean a table cannot be freed up early.
 
-**Best fix:** have the Leave button tell the server it is deliberate, so the
-seat opens for a spectator to take. Worth doing once spectator-to-player
-promotion exists; the two features only make sense together.
+**Best fix:** open the seat at the end of the current game rather than
+immediately, so a spectator could take it between deals. Worth doing together
+with spectator-to-player promotion below; neither is much use alone.
 
 ### A spectator cannot be promoted into a free seat
 

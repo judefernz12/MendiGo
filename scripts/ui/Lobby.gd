@@ -201,7 +201,8 @@ func _on_start_game_pressed() -> void:
 	NetworkManager.request_start_match()
 
 func _on_leave_pressed() -> void:
-	NetworkManager.disconnect_from_server()
+	leave_button.disabled = true
+	await NetworkManager.leave_room()
 	get_tree().change_scene_to_file("res://scenes/ui/OnlineMenu.tscn")
 
 func _on_server_disconnected() -> void:

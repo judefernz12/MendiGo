@@ -2717,7 +2717,7 @@ func _dismiss_leave_confirm() -> void:
 	leave_confirm_layer = null
 
 func _on_leave_pressed() -> void:
-	NetworkManager.disconnect_from_server()
+	await NetworkManager.leave_room()
 	get_tree().change_scene_to_file("res://scenes/ui/Home.tscn")
 
 func _on_connection_lost() -> void:

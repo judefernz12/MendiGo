@@ -150,6 +150,19 @@ func join_room(room_code: String, as_spectator: bool = false) -> void:
 		"name": local_player_name
 	}, as_spectator)
 
+func leave_room() -> void:
+	# Say so before dropping the socket. Closing alone meant the server did not
+	# find out until the WebSocket teardown reached it, and a client that
+	# re-dialled and rejoined in the meantime raced its own departure.
+	if multiplayer.multiplayer_peer != null \
+			and multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED \
+			and current_room_code != "":
+		rpc_id(1, "_server_leave_room", current_room_code, local_player_id)
+		# Let the packet actually go out before the socket closes under it.
+		await get_tree().create_timer(0.15).timeout
+
+	disconnect_from_server()
+
 func send_ready_state(is_ready: bool) -> void:
 	if multiplayer.multiplayer_peer == null or current_room_code == "":
 		return
@@ -311,6 +324,12 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 	var server := get_node_or_null("/root/root")
 	if server != null and server.has_method("_server_join_room"):
 		server._server_join_room(code, player, as_spectator, multiplayer.get_remote_sender_id())
+
+@rpc("any_peer")
+func _server_leave_room(code: String, player_id: String) -> void:
+	var server := get_node_or_null("/root/root")
+	if server != null and server.has_method("_server_leave_room"):
+		server._server_leave_room(code, player_id, multiplayer.get_remote_sender_id())
 
 @rpc("any_peer")
 func _server_set_ready(code: String, player_id: String, is_ready: bool) -> void:

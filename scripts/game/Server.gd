@@ -48,6 +48,9 @@ func _ready() -> void:
 	print("WebSocket server running on port %d" % PORT)
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	_release_peer(peer_id)
+
+func _release_peer(peer_id: int) -> void:
 	if not peer_to_room.has(peer_id):
 		return
 
@@ -58,19 +61,32 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		return
 
 	var room: Dictionary = rooms[code]
+	# A seat is only worth holding once the cards are out. In the lobby there
+	# is no hand to come back to, so holding it just left a ghost player in the
+	# room forever - and a quick rejoin then collided with the leaver's own
+	# stale entry and was told the name was taken.
+	var seats_are_dealt := str(room.get("phase", "lobby")) != "lobby"
 	var players: Array = room.get("players", [])
-	for i in range(players.size()):
+	for i in range(players.size() - 1, -1, -1):
 		var p: Dictionary = players[i]
-		if int(p.get("peer_id", -1)) == peer_id:
+		if int(p.get("peer_id", -1)) != peer_id:
+			continue
+		if seats_are_dealt:
 			p["is_connected"] = false
 			p["peer_id"] = -1
 			players[i] = p
+		else:
+			players.remove_at(i)
 
 	var spectators: Array = room.get("spectators", [])
 	for i in range(spectators.size() - 1, -1, -1):
 		var s: Dictionary = spectators[i]
 		if int(s.get("peer_id", -1)) == peer_id:
 			spectators.remove_at(i)
+
+	if not seats_are_dealt:
+		# Close the gap, honouring the sides everyone already picked.
+		players = _assign_seats(players, int((room.get("settings", _normalize_room_settings({})) as Dictionary).get("player_count", 4)))
 
 	room["players"] = players
 	room["spectators"] = spectators
@@ -1636,6 +1652,27 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 	_broadcast_lobby(code)
 	# A room that is already playing hands the newcomer the table right away.
 	_send_room_entry(peer_id, code, joined_as_spectator)
+
+@rpc("any_peer")
+func _server_leave_room(code: String, player_id: String, sender_peer_id: int = 0) -> void:
+	# Leaving used to be nothing but a closed socket, so the server only found
+	# out when the WebSocket teardown landed. A client that re-dialled and
+	# rejoined in the meantime arrived before its own departure and was told
+	# its seat was taken by another window.
+	var peer_id := sender_peer_id
+	if peer_id == 0:
+		peer_id = multiplayer.get_remote_sender_id()
+	if not rooms.has(code):
+		return
+
+	var room: Dictionary = rooms[code]
+	var index := _find_player_index(room.get("players", []), player_id)
+	if index != -1 and not _is_sender_for_player(room.get("players", [])[index], peer_id):
+		# Nobody may remove anybody else. A peer can only ever release itself,
+		# which is all _release_peer does anyway.
+		return
+
+	_release_peer(peer_id)
 
 @rpc("any_peer")
 func _server_set_ready(code: String, player_id: String, is_ready: bool, sender_peer_id: int = 0) -> void:
