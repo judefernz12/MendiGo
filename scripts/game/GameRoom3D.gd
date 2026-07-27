@@ -424,12 +424,44 @@ func _nameplate_position(view_name: String, project: Callable, plate_size: Vecto
 	pos.y = clampf(pos.y, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
 	return pos
 
+func _trick_ring_size() -> Vector2:
+	# Every player puts a card in the middle, so the ring grows with the table.
+	# Depth is the tight one - it has to sit between the far seats and the
+	# local hand - so width does most of the work.
+	match current_player_count:
+		6:
+			return Vector2(1.62, 0.75)
+		8:
+			return Vector2(2.05, 0.55)
+		_:
+			return Vector2(TRICK_RING_RX, TRICK_RING_RZ)
+
+func _trick_card_scale() -> float:
+	# Played cards shrink at a crowded table. They are face up and only need to
+	# be identified, not read from across the room.
+	match current_player_count:
+		6:
+			return 0.82
+		8:
+			return 0.70
+		_:
+			return 1.0
+
+func _trick_angle(view_name: String) -> float:
+	# Unlike the seats, the trick spreads evenly over the whole circle: it does
+	# not need a gap kept clear for the local hand, and with 6 or 8 cards to
+	# place it cannot afford one. The order around the ring still matches the
+	# order around the table, so a card still points back at who played it.
+	var n := maxi(1, seat_order.size())
+	return deg_to_rad(90.0 - float(_view_index(view_name)) * (360.0 / float(n)))
+
 func _trick_slot_position(view_name: String) -> Vector3:
-	var theta := _seat_angle(view_name)
-	return TRICK_RING_CENTER + Vector3(cos(theta) * TRICK_RING_RX, 0.0, sin(theta) * TRICK_RING_RZ)
+	var theta := _trick_angle(view_name)
+	var ring := _trick_ring_size()
+	return TRICK_RING_CENTER + Vector3(cos(theta) * ring.x, 0.0, sin(theta) * ring.y)
 
 func _play_rotation(view_name: String) -> Vector3:
-	return Vector3(90.0, 0.0, -20.0 * cos(_seat_angle(view_name)))
+	return Vector3(90.0, 0.0, -20.0 * cos(_trick_angle(view_name)))
 
 func _my_hand_transform(index: int, count: int) -> Dictionary:
 	# The fan is deliberately narrow and shallow: a wider one ran into the
@@ -934,8 +966,9 @@ func _animate_single_play(entry: Dictionary) -> void:
 	card.clickable = false
 	card.selected = false
 	card.played = true
-	# Only the local hand is drawn oversized; on the table every card matches.
-	card.scale = Vector3.ONE
+	# Only the local hand is drawn oversized; played cards shrink at a
+	# crowded table so the trick stays readable.
+	card.scale = Vector3.ONE * _trick_card_scale()
 
 	var tween := _tween_card(card, _trick_slot_position(view_name), _play_rotation(view_name), PLAY_TIME)
 	trick_entries.append({"seat": view_name, "card_id": card_id, "node": card})
@@ -974,6 +1007,7 @@ func _animate_trick_capture(previous: Dictionary, target: Dictionary) -> void:
 			var view_name := str(entry.get("seat", "my"))
 			var node := _new_card(entry, true, _trick_slot_position(view_name))
 			node.rotation_degrees = _play_rotation(view_name)
+			node.scale = Vector3.ONE * _trick_card_scale()
 			node.played = true
 			moving.append(node)
 	for leftover in rendered.values():
@@ -1180,6 +1214,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 		var view_name := str(entry.get("seat", "my"))
 		var card := _new_card(entry, true, _trick_slot_position(view_name))
 		card.rotation_degrees = _play_rotation(view_name)
+		card.scale = Vector3.ONE * _trick_card_scale()
 		card.played = true
 		trick_entries.append({"seat": view_name, "card_id": str(entry.get("card_id", "")), "node": card})
 

@@ -95,10 +95,12 @@ func plate_rect(view_name: String) -> Rect2:
 	var size: Vector2 = room_ui.NAMEPLATE_SIZE
 	return Rect2(room_ui._nameplate_position(view_name, projector(), size, VIEW), size)
 
-func card_rect_at(local_position: Vector3) -> Rect2:
+func card_rect_at(local_position: Vector3, rotation: Vector3 = Vector3(90, 0, 0), card_scale: float = 1.0) -> Rect2:
 	var probe: Node3D = room_ui.CARD_SCENE.instantiate()
 	room_ui.cards_node.add_child(probe)
 	probe.position = local_position
+	probe.rotation_degrees = rotation
+	probe.scale = Vector3.ONE * card_scale
 	var rect := card_rect(probe)
 	probe.queue_free()
 	return rect
@@ -258,7 +260,15 @@ func measure(player_count: int) -> void:
 		for r in group:
 			opponent_cards.append(r)
 
-	var trick_cards: Array = []
+	# Only part of a trick is ever on the table at the instant this measures, so
+	# the slots themselves are used: every seat plays into one, and they must
+	# all be readable side by side.
+	var trick_slots: Array = []
+	for view_raw in room_ui.seat_order:
+		var view := str(view_raw)
+		trick_slots.append(card_rect_at(room_ui._trick_slot_position(view), room_ui._play_rotation(view), room_ui._trick_card_scale()))
+
+	var trick_cards: Array = trick_slots.duplicate()
 	for entry in room_ui.trick_entries:
 		if is_instance_valid(entry["node"]):
 			trick_cards.append(card_rect(entry["node"]))
@@ -328,6 +338,7 @@ func measure(player_count: int) -> void:
 	none_clash(opponent_cards, panels, "no HUD panel covers the opponents' cards")
 	none_clash(opponent_cards, trick_cards, "the opponents' cards do not sit on the trick")
 	none_clash(opponent_cards, piles, "the opponents' cards do not sit on a captured pile")
+	no_self_clash(trick_slots, "played cards do not cover each other in the middle")
 	none_clash(trick_cards, piles, "the trick does not sit on a captured pile")
 	none_clash(trick_cards, banner, "the message banner does not cover the trick")
 	none_clash(piles, tens, "a captured pile does not cover its own 10s")

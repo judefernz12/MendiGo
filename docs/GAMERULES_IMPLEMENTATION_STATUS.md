@@ -26,8 +26,18 @@ the automated checks in `tests/` - see `tests/README.md`.
   `GameRules.txt`** - it was added on request; the spec only says legal play
   "must account for the newly returned trump card"
 - Follow suit enforced; out-of-turn, duplicate and late plays rejected (tested)
-- Trick winner: highest trump, otherwise highest card of the lead suit,
-  stamped with the trump state used to resolve it (tested every trick)
+- Trick winner: highest trump, otherwise highest card of the lead suit
+  (tested every trick, plus deterministic cases)
+- **Trump counts only from the moment it is activated.** Each played card
+  carries the trump state at the time it was played, and the trick is resolved
+  from that, not from the trump state at the end of the trick. So if a king of
+  diamonds is discarded while nothing is trump, and diamonds is then revealed
+  as the trump, a 2 of diamonds played after the reveal beats it. The same
+  applies to open trump: the off-suit card that activates the trump is itself
+  a trump and wins, but the cards played before it are not.
+  `GameRules.txt` only says the suit "becomes active permanently for the rest
+  of the game", which does not settle the mid-trick case; this is the reading
+  used at the table
 - Trick capture with the captured 10s recorded per team (tested)
 - Court = 5 points, normal = 2, equal 10s decided by tricks, equal both = draw
   with no points (tested)
@@ -128,9 +138,18 @@ Notable consequences of that check:
 - the pile's forward step is 0.022 per trick; the old 0.13 walked a full pile
   most of a card-length across the table and off the bottom of the screen
 - captured 10s are laid out in a column on the far side of their pile
-- the seat ring is a wide, flat ellipse (RX 2.8, RZ 1.60) centred on the
-  camera axis, so the piles and the trump slot get the screen margins and the
-  table sits in the middle of the screen
+- the seat ring is a wide, flat ellipse centred on the camera axis, so the
+  piles and the trump slot get the screen margins and the table sits in the
+  middle of the screen. It widens with the player count (RX 2.8/3.3/3.55)
+- everyone except the local player is spread over the arc left once a
+  78-degree gap is kept clear around the bottom. Spreading all seats evenly
+  put a neighbour right beside the local hand at 6 and 8 players
+- the trick has its own even spread over the whole circle, its own ring size
+  and its own card scale (1.0 / 0.82 / 0.70): with 8 cards to place it cannot
+  afford the bottom gap, and full-size cards covered each other
+- the table is a stadium (a slab with round caps), not an ellipse - a 1.85:1
+  ellipse reads as a stretched circle. Felt, rim and floor are three meshes at
+  the card plane's depth so the rim shows all the way round
 - the camera stays at y 6.069. Raising it to 6.7 shrank a hand card from 111 px
   to about 95 px tall, which is why the size floor is now asserted
 - opponent cards stand upright, so stacking them with only a vertical offset

@@ -65,6 +65,8 @@ func _run() -> void:
 	court_early_end_check()
 	print("=== the revealer owes a trump ===")
 	reveal_must_play_trump_check()
+	print("=== trump only counts from the moment it is revealed ===")
+	trump_activation_timing_check()
 	print("=== end of match and rematch ===")
 	rematch_check()
 	print("=== 4-player full match ===")
@@ -361,20 +363,27 @@ func verify_trick_winner(lt: Dictionary, _s: Dictionary) -> void:
 	var cards: Array = lt.get("cards", [])
 	if cards.is_empty():
 		return
-	# Use the trump state the server recorded for this trick, not the current
-	# one: a later trick can activate a different trump.
+	# Trump status is per card, recorded when it was played: revealing the
+	# hidden trump mid-trick does not turn cards already on the table into
+	# trumps.
 	var lead := str(lt.get("lead_suit", str(cards[0]["suit"])))
-	var trump := str(lt.get("trump_suit", ""))
-	var trump_on := bool(lt.get("trump_active", false))
 	ok(lead == str(cards[0]["suit"]), "lead suit matches the first card played")
 	var best: Dictionary = cards[0]
 	for c in cards:
-		var c_trump: bool = trump_on and str(c["suit"]) == trump
-		var b_trump: bool = trump_on and str(best["suit"]) == trump
-		if c_trump and not b_trump:
-			best = c
-		elif c_trump == b_trump:
-			if str(c["suit"]) == str(best["suit"]) and rank_val(str(c["rank"])) > rank_val(str(best["rank"])):
+		var c_trump := bool(c.get("was_trump_at_play_time", false))
+		var b_trump := bool(best.get("was_trump_at_play_time", false))
+		if c_trump != b_trump:
+			if c_trump:
+				best = c
+		elif c_trump:
+			if rank_val(str(c["rank"])) > rank_val(str(best["rank"])):
+				best = c
+		else:
+			var c_lead: bool = str(c["suit"]) == lead
+			var b_lead: bool = str(best["suit"]) == lead
+			if c_lead and not b_lead:
+				best = c
+			elif c_lead and b_lead and rank_val(str(c["rank"])) > rank_val(str(best["rank"])):
 				best = c
 	var expected_seat := str(best["seat_id"])
 	var expected_team: String = server._team_for_seat(expected_seat)
@@ -641,6 +650,86 @@ func reveal_must_play_trump_check() -> void:
 	var plain_before := reveal_hand_size()
 	server._apply_play_card_action("REVEAL", "seat_2", "o_club")
 	ok(reveal_hand_size() == plain_before - 1, "a void player who did not reveal may still discard off-suit")
+	server.rooms.erase("REVEAL")
+
+func trick_of(entries: Array, lead: String) -> Dictionary:
+	return {"trick_cards": entries, "lead_suit": lead}
+
+func card_entry(seat: String, suit: String, rank: String, was_trump: bool) -> Dictionary:
+	return {
+		"seat_id": seat, "card_id": "%s_%s_%s" % [seat, suit, rank], "id": 0,
+		"suit": suit, "rank": rank, "was_trump_at_play_time": was_trump
+	}
+
+func trump_activation_timing_check() -> void:
+	# Hearts led. seat_1 discards the king of diamonds while no trump is
+	# active, then seat_2 reveals the hidden trump (diamonds) and plays the 2
+	# of diamonds. Only cards played after the reveal are trumps, so the 2
+	# beats the king.
+	var late_trump := trick_of([
+		card_entry("seat_0", "hearts", "9", false),
+		card_entry("seat_1", "diamonds", "king", false),
+		card_entry("seat_2", "diamonds", "2", true),
+		card_entry("seat_3", "hearts", "4", false)
+	], "hearts")
+	ok(str(server._resolve_trick_winner(late_trump)) == "seat_2", "a trump played after the reveal beats a higher card of the same suit played before it")
+
+	# With no reveal at all, that king of diamonds is just a discard and the
+	# highest heart takes the trick.
+	var no_trump := trick_of([
+		card_entry("seat_0", "hearts", "9", false),
+		card_entry("seat_1", "diamonds", "king", false),
+		card_entry("seat_2", "diamonds", "2", false),
+		card_entry("seat_3", "hearts", "jack", false)
+	], "hearts")
+	ok(str(server._resolve_trick_winner(no_trump)) == "seat_3", "with no trump active the highest lead suit wins")
+
+	# Two real trumps still compare on rank.
+	var two_trumps := trick_of([
+		card_entry("seat_0", "hearts", "ace", false),
+		card_entry("seat_1", "diamonds", "5", true),
+		card_entry("seat_2", "diamonds", "9", true),
+		card_entry("seat_3", "hearts", "king", false)
+	], "hearts")
+	ok(str(server._resolve_trick_winner(two_trumps)) == "seat_2", "the higher of two real trumps wins")
+
+	# An off-suit card that never became a trump cannot win, whatever its rank.
+	var junk := trick_of([
+		card_entry("seat_0", "hearts", "3", false),
+		card_entry("seat_1", "spades", "ace", false),
+		card_entry("seat_2", "clubs", "ace", false),
+		card_entry("seat_3", "hearts", "4", false)
+	], "hearts")
+	ok(str(server._resolve_trick_winner(junk)) == "seat_3", "an off-suit ace that is not a trump cannot win")
+
+	# End to end through the real reveal path: the flag has to be stamped on
+	# the way in, not just honoured on the way out.
+	reveal_room([
+		{"card_id": "low_trump", "id": 701, "suit": "spades", "rank": "3"},
+		{"card_id": "spare", "id": 702, "suit": "clubs", "rank": "7"}
+	])
+	var room_state: Dictionary = server.rooms["REVEAL"]["match_state"]
+	# seat_1 has already discarded the ace of spades while nothing was trump.
+	room_state["trick_cards"] = [
+		{"seat_id": "seat_1", "card_id": "lead", "id": 600, "suit": "hearts", "rank": "9", "was_trump_at_play_time": false},
+		{"seat_id": "seat_3", "card_id": "early_spade", "id": 703, "suit": "spades", "rank": "ace", "was_trump_at_play_time": false}
+	]
+	server.rooms["REVEAL"]["match_state"] = room_state
+	server._apply_hidden_trump_reveal("REVEAL", "seat_2")
+	clear_reveal_hold()
+	server._apply_play_card_action("REVEAL", "seat_2", "low_trump")
+
+	var played: Array = server.rooms["REVEAL"]["match_state"]["trick_cards"]
+	var mine: Dictionary = {}
+	var early: Dictionary = {}
+	for entry in played:
+		if str(entry.get("card_id", "")) == "low_trump":
+			mine = entry
+		elif str(entry.get("card_id", "")) == "early_spade":
+			early = entry
+	ok(not mine.is_empty() and bool(mine.get("was_trump_at_play_time", false)), "a card played after the reveal is stamped as a trump")
+	ok(not early.is_empty() and not bool(early.get("was_trump_at_play_time", true)), "a card played before the reveal is not stamped as a trump")
+	ok(str(server._resolve_trick_winner(server.rooms["REVEAL"]["match_state"])) == "seat_2", "the 3 of trumps beats the ace played before the reveal")
 	server.rooms.erase("REVEAL")
 
 func rematch_check() -> void:

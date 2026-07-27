@@ -6,39 +6,35 @@
 
 [sub_resource type="Environment" id="Environment_w4kte"]
 background_mode = 2
-background_color = Color(0.035, 0.043, 0.051, 1)
+background_color = Color(0.11, 0.14, 0.173, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.541, 0.643, 0.6, 1)
-ambient_light_energy = 0.35
+ambient_light_color = Color(0.643, 0.71, 0.729, 1)
+ambient_light_energy = 0.5
 
 [sub_resource type="StandardMaterial3D" id="mat_felt"]
-albedo_color = Color(0.063, 0.318, 0.192, 1)
-metallic_specular = 0.1
+albedo_color = Color(0.086, 0.376, 0.239, 1)
+metallic_specular = 0.08
 roughness = 1.0
 
 [sub_resource type="StandardMaterial3D" id="mat_rim"]
-albedo_color = Color(0.216, 0.129, 0.078, 1)
-metallic_specular = 0.25
-roughness = 0.75
+albedo_color = Color(0.114, 0.235, 0.184, 1)
+metallic_specular = 0.15
+roughness = 0.85
 
 [sub_resource type="StandardMaterial3D" id="mat_floor"]
-albedo_color = Color(0.055, 0.067, 0.078, 1)
+albedo_color = Color(0.129, 0.161, 0.196, 1)
 metallic_specular = 0.0
 roughness = 1.0
 
-[sub_resource type="CylinderMesh" id="mesh_felt"]
+[sub_resource type="CylinderMesh" id="mesh_round"]
 top_radius = 1.0
 bottom_radius = 1.0
 height = 0.04
 radial_segments = 96
 rings = 1
 
-[sub_resource type="CylinderMesh" id="mesh_rim"]
-top_radius = 1.0
-bottom_radius = 1.0
-height = 0.04
-radial_segments = 96
-rings = 1
+[sub_resource type="BoxMesh" id="mesh_slab"]
+size = Vector3(1, 0.04, 1)
 
 [sub_resource type="BoxMesh" id="mesh_floor"]
 size = Vector3(60, 0.05, 60)
@@ -63,15 +59,41 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1.2645)
 material_override = SubResource("mat_floor")
 mesh = SubResource("mesh_floor")
 
-[node name="TableRim" type="MeshInstance3D" parent="."]
-transform = Transform3D(5.45, 0, 0, 0, 1, 0, 0, 0, 3.05, 0, 1.78, 1.2645)
-material_override = SubResource("mat_rim")
-mesh = SubResource("mesh_rim")
+[node name="TableRim" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.78, 1.2645)
 
-[node name="TableFelt" type="MeshInstance3D" parent="."]
-transform = Transform3D(5.1, 0, 0, 0, 1, 0, 0, 0, 2.75, 0, 1.8, 1.2645)
+[node name="RimSlab" type="MeshInstance3D" parent="TableRim"]
+transform = Transform3D(4.7, 0, 0, 0, 1, 0, 0, 0, 6.1, 0, 0, 0)
+material_override = SubResource("mat_rim")
+mesh = SubResource("mesh_slab")
+
+[node name="RimCapLeft" type="MeshInstance3D" parent="TableRim"]
+transform = Transform3D(3.05, 0, 0, 0, 1, 0, 0, 0, 3.05, -2.35, 0, 0)
+material_override = SubResource("mat_rim")
+mesh = SubResource("mesh_round")
+
+[node name="RimCapRight" type="MeshInstance3D" parent="TableRim"]
+transform = Transform3D(3.05, 0, 0, 0, 1, 0, 0, 0, 3.05, 2.35, 0, 0)
+material_override = SubResource("mat_rim")
+mesh = SubResource("mesh_round")
+
+[node name="TableFelt" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8, 1.2645)
+
+[node name="FeltSlab" type="MeshInstance3D" parent="TableFelt"]
+transform = Transform3D(4.7, 0, 0, 0, 1, 0, 0, 0, 5.5, 0, 0, 0)
 material_override = SubResource("mat_felt")
-mesh = SubResource("mesh_felt")
+mesh = SubResource("mesh_slab")
+
+[node name="FeltCapLeft" type="MeshInstance3D" parent="TableFelt"]
+transform = Transform3D(2.75, 0, 0, 0, 1, 0, 0, 0, 2.75, -2.35, 0, 0)
+material_override = SubResource("mat_felt")
+mesh = SubResource("mesh_round")
+
+[node name="FeltCapRight" type="MeshInstance3D" parent="TableFelt"]
+transform = Transform3D(2.75, 0, 0, 0, 1, 0, 0, 0, 2.75, 2.35, 0, 0)
+material_override = SubResource("mat_felt")
+mesh = SubResource("mesh_round")
 
 [node name="Cards" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2557925, 1.2896495)

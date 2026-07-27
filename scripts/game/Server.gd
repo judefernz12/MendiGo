@@ -765,29 +765,41 @@ func _is_play_legal(state: Dictionary, seat_id: String, card: Dictionary) -> boo
 		return str(card.get("suit", "")) == lead_suit
 	return true
 
+func _beats(challenger: Dictionary, holder: Dictionary, lead_suit: String) -> bool:
+	# Trump status is per card, taken from the moment it was played. Revealing
+	# the hidden trump activates the suit from that point on: a card of the
+	# trump suit that was already on the table was not a trump when it was
+	# played, so it stays an ordinary card. A 2 played after the reveal beats a
+	# King of the same suit played before it.
+	var challenger_trump := bool(challenger.get("was_trump_at_play_time", false))
+	var holder_trump := bool(holder.get("was_trump_at_play_time", false))
+	if challenger_trump != holder_trump:
+		return challenger_trump
+
+	var challenger_rank := _rank_value(str(challenger.get("rank", "")))
+	var holder_rank := _rank_value(str(holder.get("rank", "")))
+	if challenger_trump:
+		return challenger_rank > holder_rank
+
+	# Neither is a trump, so only the lead suit can win the trick.
+	var challenger_leads := str(challenger.get("suit", "")) == lead_suit
+	var holder_leads := str(holder.get("suit", "")) == lead_suit
+	if challenger_leads != holder_leads:
+		return challenger_leads
+	if challenger_leads:
+		return challenger_rank > holder_rank
+	return false
+
 func _resolve_trick_winner(state: Dictionary) -> String:
 	var trick: Array = state.get("trick_cards", [])
+	if trick.is_empty():
+		return "seat_0"
 	var lead_suit := str(state.get("lead_suit", ""))
-	var trump_active := bool(state.get("trump_active", false))
-	var trump_suit := str(state.get("trump_suit", ""))
 	var winning_entry: Dictionary = trick[0]
 
-	for entry_raw in trick:
-		var entry: Dictionary = entry_raw
-		var challenger_suit := str(entry.get("suit", ""))
-		var winner_suit := str(winning_entry.get("suit", ""))
-		var challenger_rank := _rank_value(str(entry.get("rank", "")))
-		var winner_rank := _rank_value(str(winning_entry.get("rank", "")))
-
-		if trump_active:
-			if challenger_suit == trump_suit and winner_suit != trump_suit:
-				winning_entry = entry
-				continue
-			if challenger_suit == trump_suit and winner_suit == trump_suit and challenger_rank > winner_rank:
-				winning_entry = entry
-				continue
-
-		if winner_suit != trump_suit and challenger_suit == lead_suit and winner_suit == lead_suit and challenger_rank > winner_rank:
+	for i in range(1, trick.size()):
+		var entry: Dictionary = trick[i]
+		if _beats(entry, winning_entry, lead_suit):
 			winning_entry = entry
 
 	return str(winning_entry.get("seat_id", "seat_0"))
