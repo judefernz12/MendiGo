@@ -6,13 +6,42 @@
 
 [sub_resource type="Environment" id="Environment_w4kte"]
 background_mode = 2
-background_color = Color(0.055, 0.09, 0.075, 1)
+background_color = Color(0.035, 0.043, 0.051, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.541, 0.643, 0.6, 1)
+ambient_light_energy = 0.35
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_lfoye"]
-albedo_color = Color(0.051, 0.29, 0.161, 1)
+[sub_resource type="StandardMaterial3D" id="mat_felt"]
+albedo_color = Color(0.063, 0.318, 0.192, 1)
+metallic_specular = 0.1
+roughness = 1.0
 
-[sub_resource type="BoxMesh" id="BoxMesh_3wju6"]
-size = Vector3(3.005, 0.03, 3)
+[sub_resource type="StandardMaterial3D" id="mat_rim"]
+albedo_color = Color(0.216, 0.129, 0.078, 1)
+metallic_specular = 0.25
+roughness = 0.75
+
+[sub_resource type="StandardMaterial3D" id="mat_floor"]
+albedo_color = Color(0.055, 0.067, 0.078, 1)
+metallic_specular = 0.0
+roughness = 1.0
+
+[sub_resource type="CylinderMesh" id="mesh_felt"]
+top_radius = 1.0
+bottom_radius = 1.0
+height = 0.04
+radial_segments = 96
+rings = 1
+
+[sub_resource type="CylinderMesh" id="mesh_rim"]
+top_radius = 1.0
+bottom_radius = 1.0
+height = 0.04
+radial_segments = 96
+rings = 1
+
+[sub_resource type="BoxMesh" id="mesh_floor"]
+size = Vector3(60, 0.05, 60)
 
 [node name="GameRoom3d" type="Node3D"]
 script = ExtResource("1_lfoye")
@@ -29,10 +58,20 @@ transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, -0.7
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_w4kte")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
-transform = Transform3D(3.5, 0, 0, 0, 3.5, 0, 0, 0, 3.5, 0, 0, 0.5718217)
-material_override = SubResource("StandardMaterial3D_lfoye")
-mesh = SubResource("BoxMesh_3wju6")
+[node name="Floor" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1.2645)
+material_override = SubResource("mat_floor")
+mesh = SubResource("mesh_floor")
+
+[node name="TableRim" type="MeshInstance3D" parent="."]
+transform = Transform3D(5.45, 0, 0, 0, 1, 0, 0, 0, 3.05, 0, 1.78, 1.2645)
+material_override = SubResource("mat_rim")
+mesh = SubResource("mesh_rim")
+
+[node name="TableFelt" type="MeshInstance3D" parent="."]
+transform = Transform3D(5.1, 0, 0, 0, 1, 0, 0, 0, 2.75, 0, 1.8, 1.2645)
+material_override = SubResource("mat_felt")
+mesh = SubResource("mesh_felt")
 
 [node name="Cards" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2557925, 1.2896495)

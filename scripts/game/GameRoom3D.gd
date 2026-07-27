@@ -24,6 +24,16 @@ const ALL_VIEWS := ["my", "right", "top", "left", "seat4", "seat5", "seat6", "se
 const SEAT_RING_CENTER := Vector3(0, 1, -0.10)
 const SEAT_RING_RX := 2.8
 const SEAT_RING_RZ := 1.60
+
+# A clear arc kept around the local player. With seats spread evenly over the
+# whole circle, a 6- or 8-player table puts a neighbour right beside the local
+# hand and their cards and nameplate run into it. Everyone but the local player
+# is spread over what is left of the circle instead.
+const BOTTOM_GAP_DEG := 78.0
+
+# The local hand is drawn slightly larger than the rest of the table: it is the
+# only one whose faces have to be read.
+const MY_CARD_SCALE := 1.16
 const TRICK_RING_CENTER := Vector3(0, 1, -0.10)
 const TRICK_RING_RX := 1.10
 const TRICK_RING_RZ := 0.60
@@ -177,6 +187,7 @@ var next_game_deadline_ms: int = 0
 var countdown_panel: PanelContainer = null
 var countdown_label: Label = null
 var match_over_layer: Control = null
+var leave_confirm_layer: Control = null
 
 # =========================================================================
 # setup
@@ -296,13 +307,49 @@ func _view_index(view_name: String) -> int:
 	var idx := seat_order.find(view_name)
 	return 0 if idx == -1 else idx
 
+func _ring_size() -> Vector2:
+	# More players need a wider ring, but the depth is capped by the local hand
+	# and the action buttons below it.
+	match current_player_count:
+		6:
+			return Vector2(3.30, 1.68)
+		8:
+			return Vector2(3.55, 1.72)
+		_:
+			return Vector2(SEAT_RING_RX, SEAT_RING_RZ)
+
+func _max_opponent_cards() -> int:
+	# Fewer backs per seat at a crowded table, so neighbouring stacks do not
+	# run into each other.
+	return MAX_OPPONENT_CARDS if current_player_count == 4 else 3
+
+func _opponent_spacing() -> float:
+	match current_player_count:
+		6:
+			return 0.19
+		8:
+			return 0.15
+		_:
+			return OPPONENT_CARD_SPACING
+
 func _seat_angle(view_name: String) -> float:
 	var n := maxi(1, seat_order.size())
-	return deg_to_rad(90.0 - float(_view_index(view_name)) * (360.0 / float(n)))
+	var idx := _view_index(view_name)
+	if idx == 0:
+		return deg_to_rad(90.0)
+	if n <= 2:
+		return deg_to_rad(-90.0)
+	# Keep a gap clear either side of the local player and spread everyone else
+	# over the remaining arc. For 4 players this reproduces the even spacing
+	# exactly; for 6 and 8 it lifts the neighbours away from the local hand.
+	var gap := maxf(BOTTOM_GAP_DEG, 360.0 / float(n))
+	var step := (360.0 - 2.0 * gap) / float(n - 2)
+	return deg_to_rad(90.0 - gap - float(idx - 1) * step)
 
 func _seat_anchor_position(view_name: String) -> Vector3:
 	var theta := _seat_angle(view_name)
-	return SEAT_RING_CENTER + Vector3(cos(theta) * SEAT_RING_RX, 0.0, sin(theta) * SEAT_RING_RZ)
+	var ring := _ring_size()
+	return SEAT_RING_CENTER + Vector3(cos(theta) * ring.x, 0.0, sin(theta) * ring.y)
 
 func _card_screen_rect(card: Node3D, project: Callable) -> Rect2:
 	# The card's face lives in its own XY plane, so transforming the four
@@ -338,10 +385,39 @@ func _seat_screen_rect(view_name: String, project: Callable) -> Rect2:
 	return rect
 
 func _nameplate_position(view_name: String, project: Callable, plate_size: Vector2, screen: Vector2) -> Vector2:
-	# Sit the name just under the cards it belongs to. If that would run off
-	# the bottom, put it above them instead.
 	var seat := _seat_screen_rect(view_name, project)
+	var side_offset := seat.get_center().x - screen.x * 0.5
+
+	if absf(side_offset) > screen.x * 0.30:
+		# Seats stacked up the side of the screen (6- and 8-player tables) have
+		# another seat directly below them, so their name goes beside the cards
+		# in the empty margin rather than under them.
+		var to_right := side_offset > 0.0
+		var x := seat.end.x + NAMEPLATE_GAP if to_right else seat.position.x - NAMEPLATE_GAP - plate_size.x
+		return Vector2(
+			clampf(x, 6.0, maxf(6.0, screen.x - plate_size.x - 6.0)),
+			clampf(seat.get_center().y - plate_size.y * 0.5, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
+		)
+
+	# Everyone else sits just under the cards they belong to, stepping past any
+	# other seat's cards that happen to be in the way.
 	var pos := Vector2(seat.get_center().x - plate_size.x * 0.5, seat.end.y + NAMEPLATE_GAP)
+	for _pass in range(seat_order.size()):
+		var moved := false
+		for other_raw in seat_order:
+			var other := str(other_raw)
+			if other == view_name or other == "my":
+				continue
+			var other_rect: Rect2 = _seat_screen_rect(other, project)
+			if other_rect.size == Vector2.ZERO:
+				continue
+			var hit := Rect2(pos, plate_size).intersection(other_rect)
+			if hit.size.x > 4.0 and hit.size.y > 4.0 and other_rect.end.y + NAMEPLATE_GAP > pos.y:
+				pos.y = other_rect.end.y + NAMEPLATE_GAP
+				moved = true
+		if not moved:
+			break
+
 	if pos.y + plate_size.y > screen.y - 8.0:
 		pos.y = seat.position.y - NAMEPLATE_GAP - plate_size.y
 	pos.x = clampf(pos.x, 6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
@@ -361,17 +437,25 @@ func _my_hand_transform(index: int, count: int) -> Dictionary:
 	var center := (count - 1) / 2.0
 	var spacing := 0.5
 	if count > 1:
-		spacing = min(0.72, 3.7 / float(count - 1))
+		spacing = min(0.78, 4.0 / float(count - 1))
 	var offset := (index - center) * spacing
+	# Short hands fan less, which would leave dead space at the bottom of the
+	# screen on 6- and 8-player tables. Nudge them down to compensate.
+	var forward := 0.0
+	match current_player_count:
+		6:
+			forward = 0.06
+		8:
+			forward = 0.12
 	return {
-		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, abs(index - center) * 0.05),
+		"position": my_seat_anchor.position + Vector3(offset, index * 0.001, forward + abs(index - center) * 0.05),
 		"rotation": Vector3(90, 0, (index - center) * 5.0)
 	}
 
 func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dictionary:
 	# Cards past the cap land on the last slot, so trimming the extras after a
 	# deal is invisible (every card back looks the same).
-	var slots := mini(count, MAX_OPPONENT_CARDS)
+	var slots := mini(count, _max_opponent_cards())
 	var slot := mini(index, slots - 1)
 	var theta := _seat_angle(view_name)
 	var seat_pos := _seat_anchor_position(view_name)
@@ -380,7 +464,7 @@ func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dict
 	var outward := Vector3(cos(theta), 0.0, sin(theta))
 	return {
 		"position": seat_pos
-			+ tangent * ((float(slot) - center) * OPPONENT_CARD_SPACING)
+			+ tangent * ((float(slot) - center) * _opponent_spacing())
 			+ outward * (float(index) * OPPONENT_CARD_DEPTH)
 			+ Vector3(0, index * 0.002, 0),
 		"rotation": Vector3(0.0, 90.0 - rad_to_deg(theta), (center - float(slot)) * 4.0)
@@ -389,7 +473,7 @@ func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dict
 func _visual_count(view_name: String, real_count: int) -> int:
 	if view_name == "my":
 		return real_count
-	return mini(real_count, MAX_OPPONENT_CARDS)
+	return mini(real_count, _max_opponent_cards())
 
 func _hand_transform(view_name: String, index: int, count: int) -> Dictionary:
 	if view_name == "my":
@@ -448,10 +532,12 @@ func _tween_card(card: Node3D, target_pos: Vector3, target_rot: Vector3, duratio
 func _layout_hand(view_name: String, animate: bool = true) -> void:
 	var cards: Array = _hand(view_name)
 	var count := cards.size()
+	var card_scale := Vector3.ONE * (MY_CARD_SCALE if view_name == "my" else 1.0)
 	for i in range(count):
 		var card: Node3D = cards[i]
 		if not is_instance_valid(card):
 			continue
+		card.scale = card_scale
 		var t := _hand_transform(view_name, i, count)
 		card.home_position = t["position"]
 		card.home_rotation = t["rotation"]
@@ -848,6 +934,8 @@ func _animate_single_play(entry: Dictionary) -> void:
 	card.clickable = false
 	card.selected = false
 	card.played = true
+	# Only the local hand is drawn oversized; on the table every card matches.
+	card.scale = Vector3.ONE
 
 	var tween := _tween_card(card, _trick_slot_position(view_name), _play_rotation(view_name), PLAY_TIME)
 	trick_entries.append({"seat": view_name, "card_id": card_id, "node": card})
@@ -975,6 +1063,7 @@ func _animate_hidden_trump_set_aside(previous: Dictionary, target: Dictionary) -
 	card.clickable = false
 	card.selected = false
 	card.set_face_up(false)
+	card.scale = Vector3.ONE
 	hidden_trump_node = card
 	# _animate_deal works out how many cards a seat was dealt by comparing the
 	# server's hand size against this count, so it has to follow the card out
@@ -1474,6 +1563,7 @@ func _build_status_ui() -> void:
 	trump_text.add_child(trump_label)
 
 	leave_button = Button.new()
+	leave_button.name = "LeaveButton"
 	leave_button.text = "Leave"
 	leave_button.anchor_left = 1.0
 	leave_button.anchor_right = 1.0
@@ -1481,8 +1571,30 @@ func _build_status_ui() -> void:
 	leave_button.offset_top = 12.0
 	leave_button.offset_right = -14.0
 	leave_button.offset_bottom = 50.0
-	leave_button.pressed.connect(_on_leave_pressed)
+	for state in ["normal", "hover", "pressed"]:
+		leave_button.add_theme_stylebox_override(state, _danger_style(state))
+	leave_button.add_theme_color_override("font_color", Color(1, 0.92, 0.9))
+	leave_button.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	leave_button.pressed.connect(_on_leave_requested)
 	hud.add_child(leave_button)
+
+func _danger_style(state: String) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	match state:
+		"hover":
+			style.bg_color = Color(0.76, 0.25, 0.22)
+		"pressed":
+			style.bg_color = Color(0.45, 0.13, 0.12)
+		_:
+			style.bg_color = Color(0.63, 0.19, 0.17)
+	style.border_color = Color(0.85, 0.36, 0.32, 0.9)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(10)
+	style.content_margin_left = 18
+	style.content_margin_right = 18
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	return style
 
 func _ensure_nameplates() -> void:
 	for view_name in seat_order:
@@ -2038,9 +2150,15 @@ func _turn_timer_position(view_name: String, camera: Camera3D) -> Vector2:
 		var project := func(world: Vector3) -> Vector2: return camera.unproject_position(world)
 		return _seat_screen_rect(view_name, project).get_center() - size * 0.5
 
-	var pos := Vector2(plate.position.x + plate.size.x + 8.0, plate.position.y + plate.size.y * 0.5 - size.y * 0.5)
-	if pos.x + size.x > screen.x - 8.0:
-		pos.x = plate.position.x - size.x - 8.0
+	# Under the name if there is room, otherwise above it. Sideways would run
+	# into the cards on a crowded table.
+	var pos := Vector2(
+		plate.position.x + plate.size.x * 0.5 - size.x * 0.5,
+		plate.position.y + plate.size.y + 6.0
+	)
+	if pos.y + size.y > screen.y - 8.0:
+		pos.y = plate.position.y - size.y - 6.0
+	pos.x = clampf(pos.x, 6.0, maxf(6.0, screen.x - size.x - 6.0))
 	pos.y = clampf(pos.y, 6.0, maxf(6.0, screen.y - size.y - 6.0))
 	return pos
 
@@ -2106,6 +2224,86 @@ func _process(delta: float) -> void:
 # =========================================================================
 # misc
 # =========================================================================
+
+func _on_leave_requested() -> void:
+	# Leaving mid-hand is easy to do by accident and cannot be undone from the
+	# other players' point of view, so it asks first.
+	if leave_confirm_layer != null and is_instance_valid(leave_confirm_layer):
+		return
+
+	var layer := Control.new()
+	layer.name = "LeaveConfirm"
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	hud.add_child(layer)
+	leave_confirm_layer = layer
+
+	var dim := ColorRect.new()
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0, 0, 0, 0.66)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(dim)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(center)
+
+	var card := PanelContainer.new()
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.06, 0.12, 0.09, 0.98)
+	style.border_color = Color(0.24, 0.35, 0.29)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(16)
+	style.content_margin_left = 30
+	style.content_margin_right = 30
+	style.content_margin_top = 24
+	style.content_margin_bottom = 24
+	card.add_theme_stylebox_override("panel", style)
+	center.add_child(card)
+
+	var box := VBoxContainer.new()
+	box.name = "LeaveConfirmBox"
+	box.add_theme_constant_override("separation", 10)
+	card.add_child(box)
+
+	box.add_child(_hud_label("Leave the game?", 26, COL_TEXT, HORIZONTAL_ALIGNMENT_CENTER))
+	var note := "The rest of the table keeps playing and your hand is played for you. Your seat is held if you come back."
+	var detail := _hud_label(note, 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	detail.custom_minimum_size = Vector2(420, 0)
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(detail)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 8)
+	box.add_child(spacer)
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+
+	var stay := Button.new()
+	stay.name = "StayButton"
+	stay.text = "Keep Playing"
+	stay.custom_minimum_size = Vector2(190, 48)
+	stay.pressed.connect(_dismiss_leave_confirm)
+	row.add_child(stay)
+
+	var go := Button.new()
+	go.name = "ConfirmLeaveButton"
+	go.text = "Leave"
+	go.custom_minimum_size = Vector2(150, 48)
+	for state in ["normal", "hover", "pressed"]:
+		go.add_theme_stylebox_override(state, _danger_style(state))
+	go.add_theme_color_override("font_color", Color(1, 0.92, 0.9))
+	go.pressed.connect(_on_leave_pressed)
+	row.add_child(go)
+
+func _dismiss_leave_confirm() -> void:
+	if leave_confirm_layer != null and is_instance_valid(leave_confirm_layer):
+		leave_confirm_layer.queue_free()
+	leave_confirm_layer = null
 
 func _on_leave_pressed() -> void:
 	NetworkManager.disconnect_from_server()

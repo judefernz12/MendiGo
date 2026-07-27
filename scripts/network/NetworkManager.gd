@@ -11,6 +11,7 @@ signal game_state_snapshot_received(snapshot)
 signal game_action_received(action)
 signal dealer_draw_updated(match_data)
 signal trump_mode_choice_requested(match_data)
+signal room_error(message)
 
 var peer: MultiplayerPeer = null
 
@@ -53,10 +54,32 @@ func _ready() -> void:
 		if search.contains("local=1"):
 			use_local_server = true
 
+const IDENTITY_PATH := "user://identity.cfg"
+
+func _new_player_id() -> String:
+	return str(Time.get_unix_time_from_system()) + "_" + str(randi())
+
+func _load_identity() -> void:
+	# Kept on disk so a dropped connection can reclaim its seat instead of
+	# coming back as a stranger. Two clients on one machine share user://, so
+	# the server rejects a second use of a live id and _on_identity_conflict
+	# mints a fresh one - see _client_identity_conflict.
+	var config := ConfigFile.new()
+	if config.load(IDENTITY_PATH) == OK:
+		local_player_id = str(config.get_value("identity", "player_id", ""))
+	if local_player_id == "":
+		local_player_id = _new_player_id()
+		_save_identity()
+
+func _save_identity() -> void:
+	var config := ConfigFile.new()
+	config.set_value("identity", "player_id", local_player_id)
+	config.save(IDENTITY_PATH)
+
 func connect_to_server(player_name: String) -> void:
 	local_player_name = player_name
 	if local_player_id == "":
-		local_player_id = str(Time.get_unix_time_from_system()) + "_" + str(randi())
+		_load_identity()
 
 	var ws_peer := WebSocketMultiplayerPeer.new()
 	# Free-tier hosting (Render) sleeps when idle and takes 30-60 s to wake.
@@ -205,6 +228,20 @@ func _on_server_disconnected() -> void:
 func _client_room_created(room_code: String) -> void:
 	current_room_code = room_code
 	emit_signal("room_created", room_code)
+
+@rpc("authority")
+func _client_room_error(message: String) -> void:
+	emit_signal("room_error", message)
+
+@rpc("authority")
+func _client_identity_conflict() -> void:
+	# This machine's saved id is already sitting in the room (a second client
+	# on the same PC). Take a fresh one and try again as a new player.
+	local_player_id = _new_player_id()
+	_save_identity()
+	emit_signal("room_error", "That seat is already taken by another window. Rejoining as a new player.")
+	if current_room_code != "":
+		join_room(current_room_code)
 
 @rpc("authority")
 func _client_room_joined(room_code: String) -> void:

@@ -24,6 +24,10 @@ const COURT_RESULT_DELAY_S := 9.0
 # all of them the court is locked in and nothing later can change the result.
 const TENS_IN_DECK := 4
 
+# How long a room with nobody connected is held open so a dropped player can
+# come back to their seat before it is closed.
+const EMPTY_ROOM_GRACE_S := 180.0
+
 var rooms: Dictionary = {}
 var peer_to_room: Dictionary = {}
 
@@ -68,21 +72,48 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		if int(s.get("peer_id", -1)) == peer_id:
 			spectators.remove_at(i)
 
-	var has_human := false
-	for p_raw in players:
-		var p: Dictionary = p_raw
-		if not bool(p.get("is_bot", false)):
-			has_human = true
-			break
-
-	if not has_human and spectators.is_empty():
-		rooms.erase(code)
-		return
-
 	room["players"] = players
 	room["spectators"] = spectators
 	rooms[code] = room
+
+	# A room with nobody actually connected used to live forever, because
+	# disconnected players still counted as humans. It is kept for a grace
+	# period so a dropped connection can come back to its seat, then dropped.
+	if _connected_humans(room) == 0 and spectators.is_empty():
+		room["empty_since_ms"] = Time.get_ticks_msec()
+		rooms[code] = room
+		_sweep_empty_room(code)
+		return
+
 	_broadcast_lobby(code)
+	if room.has("match_state"):
+		# Whoever is on turn may now be the server's problem.
+		_maybe_run_bot_turn(code)
+		_arm_action_deadline(code)
+
+func _connected_humans(room: Dictionary) -> int:
+	var count := 0
+	for p_raw in room.get("players", []):
+		var p: Dictionary = p_raw
+		if bool(p.get("is_bot", false)):
+			continue
+		if bool(p.get("is_connected", false)) and int(p.get("peer_id", -1)) > 0:
+			count += 1
+	return count
+
+func _sweep_empty_room(code: String) -> void:
+	await get_tree().create_timer(EMPTY_ROOM_GRACE_S).timeout
+	if not rooms.has(code):
+		return
+	var room: Dictionary = rooms[code]
+	if not room.has("empty_since_ms"):
+		return
+	if _connected_humans(room) > 0 or not (room.get("spectators", []) as Array).is_empty():
+		room.erase("empty_since_ms")
+		rooms[code] = room
+		return
+	rooms.erase(code)
+	print("Closed empty room %s" % code)
 
 func _generate_room_code() -> String:
 	const CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -206,10 +237,19 @@ func _lock_team_choices(players: Array) -> Array:
 	return players
 
 func _get_room_host_peer(room: Dictionary) -> int:
-	var players: Array = room.get("players", [])
-	if players.is_empty():
-		return -1
-	return int(players[0].get("peer_id", -1))
+	# The first player who is actually here. If the original host drops, the
+	# next connected human inherits the role - otherwise nobody could start a
+	# match or a rematch for the rest of the room's life.
+	for p_raw in room.get("players", []):
+		var p: Dictionary = p_raw
+		if bool(p.get("is_bot", false)):
+			continue
+		if not bool(p.get("is_connected", true)):
+			continue
+		var peer_id := int(p.get("peer_id", -1))
+		if peer_id > 0:
+			return peer_id
+	return -1
 
 func _find_player_index(players: Array, player_id: String) -> int:
 	for i in range(players.size()):
@@ -241,9 +281,10 @@ func _broadcast_lobby(code: String) -> void:
 	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
 	for p_raw in players:
 		var p: Dictionary = p_raw
-		if bool(p.get("is_bot", false)):
+		var peer_id := int(p.get("peer_id", -1))
+		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
-		_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_lobby_updated", players, settings)
+		_network_manager().rpc_id(peer_id, "_client_lobby_updated", players, settings)
 
 func _fill_bots(players: Array, player_count: int) -> Array:
 	# Bots are appended last and never pick a team, so they take whatever seats
@@ -619,9 +660,9 @@ func _broadcast_match_state(code: String) -> void:
 	rooms[code] = room
 	for p_raw in room.get("players", []):
 		var p: Dictionary = p_raw
-		if bool(p.get("is_bot", false)):
-			continue
 		var peer_id := int(p.get("peer_id", -1))
+		if bool(p.get("is_bot", false)) or peer_id <= 0:
+			continue
 		var seat_id := str(p.get("seat_id", ""))
 		_network_manager().rpc_id(peer_id, "_client_receive_game_state", _build_client_snapshot(room, seat_id))
 
@@ -891,6 +932,19 @@ func _seat_is_bot(room: Dictionary, seat_id: String) -> bool:
 			return bool(p.get("is_bot", false))
 	return false
 
+func _seat_is_absent(room: Dictionary, seat_id: String) -> bool:
+	for p_raw in room.get("players", []):
+		var p: Dictionary = p_raw
+		if str(p.get("seat_id", "")) == seat_id:
+			return not bool(p.get("is_bot", false)) and (not bool(p.get("is_connected", true)) or int(p.get("peer_id", -1)) <= 0)
+	return false
+
+func _seat_is_auto(room: Dictionary, seat_id: String) -> bool:
+	# A seat the server plays for: a bot, or a human who has dropped out. A
+	# disconnected player used to stall the table for the full turn deadline
+	# on every one of their turns.
+	return _seat_is_bot(room, seat_id) or _seat_is_absent(room, seat_id)
+
 func _maybe_run_bot_turn(code: String) -> void:
 	if not rooms.has(code):
 		return
@@ -901,7 +955,7 @@ func _maybe_run_bot_turn(code: String) -> void:
 	if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 		return
 	var current_seat := str(state.get("current_turn_seat_id", ""))
-	if not _seat_is_bot(room, current_seat):
+	if not _seat_is_auto(room, current_seat):
 		return
 	if bool(room.get("bot_turn_scheduled", false)):
 		return
@@ -922,7 +976,7 @@ func _run_bot_turn_after_delay(code: String) -> void:
 	if bool(state.get("resolving", false)) or bool(state.get("revealing_trump", false)):
 		return
 	var current_seat := str(state.get("current_turn_seat_id", ""))
-	if not _seat_is_bot(room, current_seat):
+	if not _seat_is_auto(room, current_seat):
 		return
 	var card_id := _choose_bot_card(state, current_seat)
 	if card_id != "":
@@ -1010,7 +1064,7 @@ func _arm_action_deadline(code: String) -> void:
 		wait_time = CHOICE_DEADLINE_S
 	else:
 		return
-	if seat == "" or _seat_is_bot(room, seat):
+	if seat == "" or _seat_is_auto(room, seat):
 		return
 	_run_action_deadline(code, token, phase, seat, wait_time)
 
@@ -1127,12 +1181,13 @@ func _broadcast_dealer_draw(code: String) -> void:
 
 	for p_raw in room.get("players", []):
 		var p: Dictionary = p_raw
-		if bool(p.get("is_bot", false)):
+		var peer_id := int(p.get("peer_id", -1))
+		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
 		if room.get("phase", "") == "trump_mode_choice":
-			_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_trump_mode_choice_requested", data)
+			_network_manager().rpc_id(peer_id, "_client_trump_mode_choice_requested", data)
 		else:
-			_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_dealer_draw_updated", data)
+			_network_manager().rpc_id(peer_id, "_client_dealer_draw_updated", data)
 
 func _decide_dealer_from_draw(code: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -1178,7 +1233,7 @@ func _maybe_auto_choose_trump_for_bot(code: String) -> void:
 		return
 
 	var trump_holder := str(state.get("trump_holder_seat_id", ""))
-	if not _seat_is_bot(room, trump_holder):
+	if not _seat_is_auto(room, trump_holder):
 		return
 
 	# Let clients finish animating the first batch before the bot decides.
@@ -1203,9 +1258,10 @@ func _start_server_match_scene(code: String) -> void:
 
 	for p_raw in room.get("players", []):
 		var p: Dictionary = p_raw
-		if bool(p.get("is_bot", false)):
+		var peer_id := int(p.get("peer_id", -1))
+		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
-		_network_manager().rpc_id(int(p.get("peer_id", -1)), "_client_start_match", setup)
+		_network_manager().rpc_id(peer_id, "_client_start_match", setup)
 
 func _apply_trump_mode_choice(code: String, seat_id: String, mode: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -1238,7 +1294,7 @@ func _maybe_auto_choose_hidden_trump_for_bot(code: String) -> void:
 		return
 
 	var holder := str(state.get("trump_holder_seat_id", ""))
-	if not _seat_is_bot(room, holder):
+	if not _seat_is_auto(room, holder):
 		return
 
 	await get_tree().create_timer(BOT_CHOICE_DELAY_S).timeout
@@ -1425,10 +1481,18 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 	var existing_index := _find_player_index(players, player_id)
 	if existing_index != -1:
 		var existing: Dictionary = players[existing_index]
+		var held_peer := int(existing.get("peer_id", -1))
+		if bool(existing.get("is_connected", false)) and held_peer > 0 and held_peer != peer_id:
+			# Someone else is already sitting there under this id - two clients
+			# on one machine sharing a saved identity, most likely. Tell the
+			# newcomer to make a fresh one rather than stealing the seat.
+			_network_manager().rpc_id(peer_id, "_client_identity_conflict")
+			return
 		existing["peer_id"] = peer_id
 		existing["is_connected"] = true
 		players[existing_index] = existing
 		room["players"] = players
+		room.erase("empty_since_ms")
 		rooms[code] = room
 		peer_to_room[peer_id] = code
 		_network_manager().rpc_id(peer_id, "_client_room_joined", code)
@@ -1437,8 +1501,12 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 			_broadcast_match_state(code)
 		return
 
-	if as_spectator or players.size() >= int(settings.get("player_count", 4)):
+	# Seats are fixed when the match starts: a newcomer would have no hand and
+	# no place in the deal, so they watch instead.
+	var match_running := str(room.get("phase", "lobby")) != "lobby"
+	if as_spectator or match_running or players.size() >= int(settings.get("player_count", 4)):
 		if not bool(settings.get("spectators_enabled", true)):
+			_network_manager().rpc_id(peer_id, "_client_room_error", "This room is full and is not taking spectators.")
 			return
 		var spectators: Array = room.get("spectators", [])
 		var spectator := _normalize_player(player, peer_id)
@@ -1522,10 +1590,18 @@ func _server_start_match(code: String, player_id: String, sender_peer_id: int = 
 	if sender != _get_room_host_peer(room):
 		return
 
+	if str(room.get("phase", "lobby")) != "lobby":
+		return
+
 	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
+	var needed := int(settings.get("player_count", 4))
 	if bool(settings.get("bots_enabled", true)):
-		room["players"] = _fill_bots(room.get("players", []), int(settings.get("player_count", 4)))
-	elif room.get("players", []).size() < int(settings.get("player_count", 4)):
+		room["players"] = _fill_bots(room.get("players", []), needed)
+	elif room.get("players", []).size() < needed:
+		# Bots are off and the table is short. Say so instead of the Start
+		# button appearing to do nothing at all.
+		_network_manager().rpc_id(sender, "_client_room_error",
+			"Need %d players to start (%d here). Turn on bots or wait for more players." % [needed, room.get("players", []).size()])
 		return
 	room["phase"] = "dealer_draw"
 	room["dealer_draw_cards"] = _create_dealer_draw_cards(int(settings.get("player_count", 4)))

@@ -53,8 +53,11 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Scores carry across games in a match (tested)
 - Server turn deadlines (20 s play, 25 s choices) with autoplay
 - Bots play legal cards after a short think delay
-- Seat reservation and full-state resend on reconnect
-- Spectator snapshots redacted
+- Seat reservation and full-state resend on reconnect; an absent player's hand
+  is played by the server at bot speed rather than stalling on the deadline
+- Spectator snapshots redacted; nobody may take a seat once the deal has begun
+- See `docs/CONNECTION_EDGE_CASES.md` for the full disconnect/reconnect/join
+  audit, what is handled and what is deliberately left alone
 
 ## Animations implemented (client)
 

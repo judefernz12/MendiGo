@@ -13,6 +13,7 @@ Run from the project root (use the same Godot version as the project):
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/lobby_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/layout_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/trump_test.gd
+& "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/resilience_test.gd
 ```
 
 `rules_test.gd` prints `ALL_RULES_OK` and exits 0 when every rule in
@@ -116,6 +117,17 @@ rather than living at the local one, the between-games countdown, and the
 match-over screen (with Play Again for the host only, and Back to Menu for
 everyone).
 
+`resilience_test.gd` prints `ALL_RESILIENCE_OK`. It covers what happens when
+things go wrong: a player dropping out (seat held, server takes over promptly
+rather than after the full turn deadline, reconnect reclaims it), someone
+joining a game already in progress (spectator, never a seat), two clients on
+one machine sharing a saved identity (the live seat cannot be stolen), the host
+leaving (the role passes to the next connected player), a short table with bots
+off (refused, with a reason), and everybody leaving (the room is held briefly,
+then closed). See `docs/CONNECTION_EDGE_CASES.md` for the write-up, including
+what is deliberately *not* handled.
+
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
-they wait out the server's real bot and trick-resolve delays; the rest are
-quick.
+they wait out the server's real bot and trick-resolve delays; `layout_test.gd`
+runs three whole tables (4, 6 and 8 players), so it is the slowest. The rest
+are quick.

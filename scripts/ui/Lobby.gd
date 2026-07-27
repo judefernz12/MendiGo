@@ -36,6 +36,7 @@ func _ready() -> void:
 	NetworkManager.dealer_draw_updated.connect(_on_dealer_draw_updated)
 	NetworkManager.trump_mode_choice_requested.connect(_on_trump_mode_choice_requested)
 	NetworkManager.disconnected_from_server.connect(_on_server_disconnected)
+	NetworkManager.room_error.connect(_on_room_error)
 
 	if NetworkManager.current_lobby_players.size() > 0:
 		players = NetworkManager.current_lobby_players.duplicate(true)
@@ -135,6 +136,18 @@ func _refresh_players() -> void:
 
 func _on_join_team_pressed(team: String) -> void:
 	NetworkManager.send_team_choice(team)
+
+func _on_room_error(message: String) -> void:
+	# The server refused something (a short table, a full room). Say so on the
+	# hint line rather than letting the button look broken.
+	hint_label.visible = true
+	hint_label.text = message
+	hint_label.add_theme_color_override("font_color", Color(0.95, 0.42, 0.40))
+	await get_tree().create_timer(6.0).timeout
+	if is_instance_valid(hint_label):
+		hint_label.remove_theme_color_override("font_color")
+		hint_label.text = "Pick a side before the host starts. Empty seats are filled with bots."
+		_refresh_players()
 
 func _is_local_host() -> bool:
 	if players.is_empty():
