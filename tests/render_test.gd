@@ -449,6 +449,21 @@ func spectator_view_check(net: Node) -> void:
 	ok(watcher.spectator_badge != null and watcher.spectator_badge.visible, "the screen says it is watching")
 	ok(watcher._display_name("my") != "You", "the bottom seat is named, not called 'You'")
 
+	# Every seat on a watcher's table belongs to somebody, so every seat needs
+	# a name. The bottom one used to be skipped, because for a player it is
+	# themselves - which is the one missing name tag.
+	ok(watcher.nameplates.size() == watcher.seat_order.size(), "every seat carries a nameplate, the bottom one included")
+	var bottom_plate: Label = watcher.nameplates.get("my", null)
+	ok(bottom_plate != null, "the bottom seat has a nameplate at all")
+	if bottom_plate != null:
+		watcher._update_nameplates()
+		var seated_name := str((watcher.seat_to_player.get("my", {}) as Dictionary).get("name", ""))
+		ok(seated_name != "" and str(bottom_plate.text).contains(seated_name), "and it shows that player's real name")
+		var view := watcher.get_viewport().get_visible_rect().size
+		var plate_rect := Rect2(bottom_plate.position, bottom_plate.size)
+		ok(plate_rect.position.x >= 0.0 and plate_rect.end.x <= view.x, "the bottom nameplate stays on screen horizontally")
+		ok(plate_rect.position.y >= 0.0 and plate_rect.end.y <= view.y, "and vertically")
+
 	# Clicking anyway must do nothing.
 	var current: Array = watcher.hand_cards.get("my", [])
 	if not current.is_empty():

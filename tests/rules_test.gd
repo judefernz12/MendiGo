@@ -402,6 +402,30 @@ func team_of(room_code: String, player_id: String) -> String:
 		return ""
 	return server._team_for_seat(seat)
 
+func team_sizes(room_code: String) -> Array:
+	var a := 0
+	var b := 0
+	for p in server.rooms.get(room_code, {}).get("players", []):
+		if team_of(room_code, str(p.get("id", ""))) == "A":
+			a += 1
+		else:
+			b += 1
+	return [a, b]
+
+func teams_now(room_code: String) -> Dictionary:
+	var out := {}
+	for p in server.rooms.get(room_code, {}).get("players", []):
+		var pid := str(p.get("id", ""))
+		out[pid] = team_of(room_code, pid)
+	return out
+
+func moved_count(room_code: String, before: Dictionary) -> int:
+	var moved := 0
+	for pid in before.keys():
+		if team_of(room_code, str(pid)) != str(before[pid]):
+			moved += 1
+	return moved
+
 func team_choice_check() -> void:
 	server.rooms.clear()
 	server._server_create_room({"id": "p1", "name": "Alice"}, {
@@ -426,21 +450,32 @@ func team_choice_check() -> void:
 		distinct[str(p.get("seat_id", ""))] = true
 	ok(distinct.size() == server.rooms[c].get("players", []).size(), "two players never share a seat")
 
-	# Team B is now full for a 4-player room, so p1 cannot join it.
-	var before := seat_of(c, "p1")
+	# Team B is now full for a 4-player room. Refusing the request outright
+	# meant that once a room filled up nobody could change sides at all, since
+	# by then every move is a move into a full side. It becomes a trade.
+	var sides_before := team_sizes(c)
+	var teams_before := teams_now(c)
+	var p1_seat_before := seat_of(c, "p1")
 	server._server_set_team(c, "p1", "B", 2)
-	ok(team_of(c, "p1") == "A", "a full team refuses another player")
-	ok(seat_of(c, "p1") == before, "a refused team choice does not move the player")
+	ok(team_of(c, "p1") == "B", "asking for a full side trades places rather than being refused")
+	ok(seat_of(c, "p1") != p1_seat_before, "the mover really does change seats")
+	ok(team_sizes(c) == sides_before, "a trade leaves both sides the same size")
+	ok(moved_count(c, teams_before) == 2, "exactly one other player moves in a trade")
+	ok(team_of(c, "p2") == "B", "whoever settled on that side first is left where they are")
 
-	# Cara goes back to A, which frees a B seat for p1.
-	server._server_set_team(c, "p3", "A", 4)
-	ok(team_of(c, "p3") == "A", "a player can switch back")
-	server._server_set_team(c, "p1", "B", 2)
-	ok(team_of(c, "p1") == "B", "the seat freed by a switch becomes available")
+	# And it works the other way, so a trade can always be undone.
+	var sides_mid := team_sizes(c)
+	server._server_set_team(c, "p3", "B", 4)
+	ok(team_of(c, "p3") == "B", "a player can trade back the other way")
+	ok(team_sizes(c) == sides_mid, "and the sides stay balanced")
+	var seats_after_trade := {}
+	for p in server.rooms[c].get("players", []):
+		seats_after_trade[str(p.get("seat_id", ""))] = true
+	ok(seats_after_trade.size() == server.rooms[c].get("players", []).size(), "a trade never puts two players on one seat")
 
-	# Someone else's peer may not move a player.
+	# Someone else's peer may not move a player, trade or not.
 	var cara_seat := seat_of(c, "p3")
-	server._server_set_team(c, "p3", "B", 2)
+	server._server_set_team(c, "p3", "A", 2)
 	ok(seat_of(c, "p3") == cara_seat, "a team choice from the wrong peer is rejected")
 
 	# Bots fill the remaining seats and the human choices survive the fill.

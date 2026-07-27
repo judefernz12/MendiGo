@@ -80,6 +80,19 @@ func _run() -> void:
 	ok(not lobby.join_team_a_button.disabled, "the other side can be joined")
 	ok(str(lobby.join_team_b_button.text).contains("You're in"), "the button says which side the player is on")
 
+	# A side with room reads as Join; a full one reads as Swap and stays live,
+	# because refusing it would freeze the teams the moment a room fills up.
+	server._server_join_room(code, {"id": "guest_2", "name": "Cara"}, false, 4)
+	server._server_set_team(code, "guest_2", "A", 4)
+	await push_lobby()
+	ok(str(lobby.join_team_a_button.text).contains("Swap"), "a full side offers a swap")
+	ok(not lobby.join_team_a_button.disabled, "and the swap is actually clickable")
+	ok(str(lobby.join_team_a_button.tooltip_text).contains("trade places"), "and says what it will do")
+
+	server._server_leave_room(code, "guest_2", 4)
+	await push_lobby()
+	ok(str(lobby.join_team_a_button.text).contains("Join"), "a side with room reads as Join again")
+
 	# The guest switches to team A: both humans must end up as partners.
 	server._server_set_team(code, "guest_1", "A", 3)
 	await push_lobby()

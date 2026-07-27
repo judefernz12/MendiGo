@@ -59,6 +59,9 @@ correctly. It feeds real server snapshots into the real game scene and checks:
 - a court raises the celebration overlay with its banner and confetti, the
   result chip and banner message both say COURT, resending the same result
   does not stack a second overlay, and a new game re-arms it
+- a watcher gets a nameplate for every seat, the bottom one included, showing
+  that player's real name - it used to be skipped, because for a player the
+  bottom seat is themselves, which was the one missing name tag
 - the same table, opened as a spectator, gives nothing away and does nothing:
   the seat drawn at the bottom belongs to somebody else, so it must stay face
   down, capped like every other seat, unclickable and named rather than called
@@ -80,9 +83,11 @@ empty seats read as bots, the headers show how full each side is, the join
 buttons reflect where the local player actually sits, and only the host sees
 the start button.
 
-It also covers watching and the handoff into the game. A watcher must not be
-shown seat controls that would silently do nothing, and the lobby must count
-the watchers for the players. The handoff check opens a lobby that already has
+It also covers watching, side-swapping and the handoff into the game. A watcher
+must not be shown seat controls that would silently do nothing, and the lobby
+must count the watchers for the players. A side with room reads as "Join A"; a
+full one reads "Swap to A" and stays clickable, with a tooltip saying it will
+trade places - a full side used to be a dead button. The handoff check opens a lobby that already has
 a game entry waiting - the case where the server's answer beat the scene into
 existence - and requires it to consume that entry and hand the game scene the
 match, the whole table, and the local player marked. A watcher's handoff must
@@ -148,6 +153,13 @@ window. Mid-match, the same action must *hold* the seat, because the hand is
 already dealt. The checks also cover a tab closed without warning, seats staying
 distinct after someone goes, the host handing the room over, and the fact that
 no peer can remove anybody but itself.
+
+**Watch and Join have to mean different things.** Coming back with Watch must
+put the player in the audience and leave their seat auto-played, not hand it
+straight back; the server must then refuse a card played from that connection,
+whatever the client sends; and Join must take the seat back and clear them from
+the audience. From the lobby the same swap gives the seat up entirely, because
+there is no hand to hold it for.
 
 It also pins down **where a client is sent when it arrives after the lobby**,
 which is the check that would have caught the rejoin bug: `_room_entry_for`

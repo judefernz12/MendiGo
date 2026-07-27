@@ -776,8 +776,11 @@ func _sync_meta(target: Dictionary) -> void:
 
 	# The server is the authority on whether this client holds a seat, so a
 	# snapshot can promote a client to watching but never the other way round.
-	if bool(target.get("is_spectator", false)):
+	if bool(target.get("is_spectator", false)) and not is_spectator:
 		is_spectator = true
+		# The bottom seat has just become somebody else's, so it needs a name.
+		_ensure_nameplates()
+		_build_spectator_badge()
 
 	var turn_index := int(target.get("current_turn_index", -1))
 	my_turn = (turn_index == 0) and not is_spectator
@@ -1805,9 +1808,15 @@ func _danger_style(state: String) -> StyleBoxFlat:
 	style.content_margin_bottom = 10
 	return style
 
+func _wants_nameplate(view_name: String) -> bool:
+	# The bottom seat normally needs no plate - it is the player reading the
+	# screen. For a watcher it is a real player like any other, and leaving it
+	# out was the one missing name tag on the table.
+	return view_name != "my" or is_spectator
+
 func _ensure_nameplates() -> void:
 	for view_name in seat_order:
-		if view_name == "my" or nameplates.has(view_name):
+		if not _wants_nameplate(view_name) or nameplates.has(view_name):
 			continue
 		var plate := Label.new()
 		plate.size = NAMEPLATE_SIZE
@@ -1833,7 +1842,7 @@ func _ensure_nameplates() -> void:
 		nameplates[view_name] = plate
 
 	for view_name in nameplates.keys():
-		if not seat_order.has(view_name):
+		if not seat_order.has(view_name) or not _wants_nameplate(view_name):
 			(nameplates[view_name] as Label).queue_free()
 			nameplates.erase(view_name)
 			nameplate_styles.erase(view_name)
@@ -2496,6 +2505,8 @@ func _build_spectator_badge() -> void:
 	# A watcher has no cards and no buttons, so without this the screen is not
 	# obviously different from a game you are simply not on turn in.
 	if not is_spectator:
+		return
+	if spectator_badge != null and is_instance_valid(spectator_badge):
 		return
 
 	spectator_badge = PanelContainer.new()

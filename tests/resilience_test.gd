@@ -53,6 +53,7 @@ func _run() -> void:
 	mid_game_join_check()
 	rejoin_entry_check()
 	spectator_check()
+	seat_to_watcher_check()
 	spectators_disabled_check()
 	identity_conflict_check()
 	host_handover_check()
@@ -282,6 +283,56 @@ func spectator_check() -> void:
 	ok(not (hands.get("my", []) as Array).is_empty(), "a watcher still sees how many cards each seat holds")
 	ok(faces_up == 0, "no hand is face up for a watcher, the bottom seat included")
 	ok(real_ranks == 0, "and no card carries its real identity")
+	server.rooms.clear()
+
+func watching_in(code: String, player_id: String) -> bool:
+	for s in room(code).get("spectators", []):
+		if str(s.get("id", "")) == player_id:
+			return true
+	return false
+
+func seat_to_watcher_check() -> void:
+	# Someone who leaves a game and comes back with Watch used to have their
+	# seat handed straight back: back online, on turn, able to play. Watch has
+	# to mean watch, and Join has to mean join.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 11)
+	server._server_start_match(code, "host", 10)
+	var guest_seat := str(player_in(code, "guest").get("seat_id", ""))
+	start_playing(code)
+
+	server._server_leave_room(code, "guest", 11)
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, true, 12)
+
+	var seated := player_in(code, "guest")
+	ok(watching_in(code, "guest"), "coming back with Watch puts them in the audience")
+	ok(not bool(seated.get("is_connected", true)), "and does not put them back in the game")
+	ok(int(seated.get("peer_id", -1)) <= 0, "their new connection does not reclaim the seat")
+	ok(server._seat_is_auto(room(code), guest_seat), "the server keeps playing the seat they left")
+
+	# And the server refuses anything they try to send from the audience.
+	var hand_before: int = (room(code).get("match_state", {}).get("hands", {}).get(guest_seat, []) as Array).size()
+	var card_id := str((room(code).get("match_state", {}).get("hands", {}).get(guest_seat, []) as Array)[0].get("card_id", ""))
+	server._server_receive_game_action(code, "guest", {"type": "play_card", "card_id": card_id}, 12)
+	var hand_after: int = (room(code).get("match_state", {}).get("hands", {}).get(guest_seat, []) as Array).size()
+	ok(hand_after == hand_before, "a watcher cannot play a card, whatever their client sends")
+
+	# Clicking Join takes the seat back and empties the audience.
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 13)
+	var back := player_in(code, "guest")
+	ok(bool(back.get("is_connected", false)), "Join puts them back in the game")
+	ok(str(back.get("seat_id", "")) == guest_seat, "on the seat that was held for them")
+	ok(not watching_in(code, "guest"), "and takes them out of the audience")
+
+	# The same swap from the lobby frees the seat outright: there is no hand.
+	server.rooms.clear()
+	var lobby_code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+	server._server_join_room(lobby_code, {"id": "guest", "name": "Guest"}, false, 21)
+	server._server_join_room(lobby_code, {"id": "guest", "name": "Guest"}, true, 22)
+	ok(player_in(lobby_code, "guest").is_empty(), "watching from the lobby gives the seat up entirely")
+	ok(watching_in(lobby_code, "guest"), "and moves them to the audience")
+	ok((room(lobby_code).get("spectators", []) as Array).size() == 1, "they are listed once, not twice")
 	server.rooms.clear()
 
 func spectators_disabled_check() -> void:

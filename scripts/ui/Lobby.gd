@@ -146,13 +146,31 @@ func _refresh_players() -> void:
 		return
 
 	var my_team := _local_team()
-	join_team_a_button.text = "You're in A" if my_team == "A" else "Join A"
-	join_team_b_button.text = "You're in B" if my_team == "B" else "Join B"
-	join_team_a_button.disabled = my_team == "A" or _members_of("A").size() >= capacity
-	join_team_b_button.disabled = my_team == "B" or _members_of("B").size() >= capacity
+	_style_team_button(join_team_a_button, "A", my_team, capacity)
+	_style_team_button(join_team_b_button, "B", my_team, capacity)
 
 	hint_label.visible = not _is_local_host() or players.size() < 2 or _watcher_count() > 0
 	hint_label.text = _default_hint()
+
+func _style_team_button(button: Button, team: String, my_team: String, capacity: int) -> void:
+	if my_team == team:
+		button.text = "You're in %s" % team
+		button.disabled = true
+		button.tooltip_text = ""
+		return
+
+	# A full side is still reachable: the server trades the mover with somebody
+	# already there. Once a room fills up every move is into a full side, so
+	# refusing here would mean nobody could ever change sides again.
+	if _members_of(team).size() >= capacity:
+		button.text = "Swap to %s" % team
+		button.disabled = false
+		button.tooltip_text = "Team %s is full - you will trade places with a player on it." % team
+		return
+
+	button.text = "Join %s" % team
+	button.disabled = false
+	button.tooltip_text = ""
 
 func _watcher_count() -> int:
 	return int(settings.get("spectator_count", 0))

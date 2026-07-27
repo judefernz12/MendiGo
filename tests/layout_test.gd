@@ -241,6 +241,79 @@ func check_table(player_count: int, net: Node) -> void:
 
 	ok(room_ui.seat_order.size() == player_count, "the table is laid out for %d seats" % player_count)
 	measure(player_count)
+	await check_spectator_plates(player_count, net)
+
+func check_spectator_plates(player_count: int, net: Node) -> void:
+	# A watcher's table has one more nameplate than a player's: the bottom seat
+	# belongs to somebody else, so it needs a name too. That extra plate sits
+	# where nothing has ever had to fit before, so it gets measured like the
+	# rest rather than assumed to be fine.
+	var players_setup: Array = []
+	for p in srv_room().get("players", []):
+		players_setup.append({
+			"id": str(p.get("id", "")), "name": str(p.get("name", "")),
+			"seat_id": str(p.get("seat_id", "")), "is_bot": bool(p.get("is_bot", false)),
+			"is_local": false
+		})
+	net.pending_match_setup = {
+		"players": players_setup, "phase": "server_match",
+		"dealer_seat_id": str(st().get("dealer_seat_id", "")),
+		"trump_holder_seat_id": str(st().get("trump_holder_seat_id", "")),
+		"dealer_draw_cards": [], "is_spectator": true, "is_host": false
+	}
+	net.latest_game_state_snapshot = {}
+
+	var player_view: Node = room_ui
+	var watcher: Node = load("res://scenes/game/GameRoom3D.tscn").instantiate()
+	root.add_child(watcher)
+	await process_frame
+
+	room_ui = watcher          # every measuring helper reads room_ui
+	camera = watcher.get_node_or_null("Camera3D")
+	watcher._on_snapshot_received(server._build_spectator_snapshot(srv_room()))
+	await process_frame
+	var deadline := Time.get_ticks_msec() + 25000
+	while watcher.is_rendering and Time.get_ticks_msec() < deadline:
+		await process_frame
+	await process_frame
+	await process_frame
+
+	ok(watcher.nameplates.size() == player_count, "a watcher gets a nameplate for every seat")
+
+	var plates: Array = []
+	var cards: Array = []
+	for view_raw in watcher.seat_order:
+		var view_name := str(view_raw)
+		plates.append(plate_rect(view_name))
+		cards.append_array(rects_of(watcher.hand_cards.get(view_name, [])))
+
+	var screen := Rect2(Vector2.ZERO, VIEW)
+	var off_screen := 0
+	for r_raw in plates:
+		var r: Rect2 = r_raw
+		if not screen.encloses(r):
+			off_screen += 1
+	ok(off_screen == 0, "every watcher nameplate is fully on screen")
+
+	no_self_clash(plates, "watcher nameplates do not land on each other")
+	none_clash(plates, cards, "watcher nameplates stay clear of the cards")
+	none_clash(plates, rects_of(_trick_nodes(watcher)), "watcher nameplates stay clear of the trick")
+	none_clash(plates, [control_rect(watcher.score_panel), control_rect(watcher.trump_panel)], "watcher nameplates stay clear of the panels")
+	none_clash(plates, [control_rect(watcher.spectator_badge)], "watcher nameplates stay clear of the watching badge")
+
+	room_ui = player_view
+	camera = player_view.get_node_or_null("Camera3D") if is_instance_valid(player_view) else null
+	watcher.queue_free()
+	await process_frame
+
+func _trick_nodes(ui: Node) -> Array:
+	var out: Array = []
+	for entry_raw in ui.trick_entries:
+		var entry: Dictionary = entry_raw
+		var node = entry.get("node", null)
+		if node != null and is_instance_valid(node):
+			out.append(node)
+	return out
 
 func measure(player_count: int) -> void:
 	var screen := Rect2(Vector2.ZERO, VIEW)

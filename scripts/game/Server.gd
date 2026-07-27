@@ -267,6 +267,21 @@ func _get_room_host_peer(room: Dictionary) -> int:
 			return peer_id
 	return -1
 
+func _without_spectator(room: Dictionary, player_id: String, peer_id: int) -> Array:
+	var kept: Array = []
+	for s_raw in room.get("spectators", []):
+		var s: Dictionary = s_raw
+		if str(s.get("id", "")) == player_id or int(s.get("peer_id", -1)) == peer_id:
+			continue
+		kept.append(s)
+	return kept
+
+func _is_spectator_peer(room: Dictionary, peer_id: int) -> bool:
+	for s_raw in room.get("spectators", []):
+		if int((s_raw as Dictionary).get("peer_id", -1)) == peer_id:
+			return true
+	return false
+
 func _find_player_index(players: Array, player_id: String) -> int:
 	for i in range(players.size()):
 		var p: Dictionary = players[i]
@@ -1601,6 +1616,27 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 	var player_id := str(player.get("id", ""))
 
 	var existing_index := _find_player_index(players, player_id)
+	if existing_index != -1 and as_spectator:
+		# They hold a seat but asked to watch. Reclaiming it anyway put them
+		# back in the game as a player - online, on turn, able to play - which
+		# is not what the Watch button says it does. Give up the seat instead:
+		# released outright in the lobby, held and auto-played once the cards
+		# are out, because a dealt hand cannot be handed to anybody else.
+		var seated: Dictionary = players[existing_index]
+		var held_peer_id := int(seated.get("peer_id", -1))
+		if str(room.get("phase", "lobby")) == "lobby":
+			players.remove_at(existing_index)
+			players = _assign_seats(players, int(settings.get("player_count", 4)))
+		else:
+			seated["is_connected"] = false
+			seated["peer_id"] = -1
+			players[existing_index] = seated
+		if held_peer_id > 0 and held_peer_id != peer_id:
+			peer_to_room.erase(held_peer_id)
+		room["players"] = players
+		rooms[code] = room
+		existing_index = -1
+
 	if existing_index != -1:
 		var existing: Dictionary = players[existing_index]
 		var held_peer := int(existing.get("peer_id", -1))
@@ -1614,6 +1650,9 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		existing["is_connected"] = true
 		players[existing_index] = existing
 		room["players"] = players
+		# They may have been watching a moment ago; taking the seat back means
+		# they are no longer in the audience.
+		room["spectators"] = _without_spectator(room, player_id, peer_id)
 		room.erase("empty_since_ms")
 		rooms[code] = room
 		peer_to_room[peer_id] = code
@@ -1635,7 +1674,9 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 			var why := "That game has already started" if match_running else "This room is full"
 			_network_manager().rpc_id(peer_id, "_client_room_error", "%s and is not taking spectators." % why)
 			return
-		var spectators: Array = room.get("spectators", [])
+		# Never list the same watcher twice - they may be re-dialling, or
+		# switching over from a seat they just gave up.
+		var spectators := _without_spectator(room, player_id, peer_id)
 		var spectator := _normalize_player(player, peer_id)
 		spectator["seat_id"] = "spectator"
 		spectator["is_spectator"] = true
@@ -1718,16 +1759,43 @@ func _server_set_team(code: String, player_id: String, team: String, sender_peer
 
 	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
 	var player_count := int(settings.get("player_count", 4))
-	# A full side cannot take another player; the request is simply ignored so
-	# the client keeps the seat it already had.
-	if _team_choice_count(players, team, player_id) >= _team_capacity(player_count):
+	var mine := str(p.get("team_choice", ""))
+	if mine == team:
 		return
+
+	# A full side used to refuse the request outright, which meant that once a
+	# room filled up nobody could change sides at all - every move is into a
+	# full side by then. Trade places instead: the mover goes over, and one
+	# player from that side comes back the other way.
+	if _team_choice_count(players, team, player_id) >= _team_capacity(player_count):
+		var partner_index := _swap_partner_index(players, team, player_id)
+		if partner_index == -1:
+			return
+		var partner: Dictionary = players[partner_index]
+		partner["team_choice"] = mine
+		players[partner_index] = partner
 
 	p["team_choice"] = team
 	players[index] = p
 	room["players"] = _assign_seats(players, player_count)
 	rooms[code] = room
 	_broadcast_lobby(code)
+
+func _swap_partner_index(players: Array, team: String, mover_id: String) -> int:
+	# Who comes back the other way. A bot first - it has no preference at all -
+	# and otherwise the player who joined that side most recently, so the people
+	# who settled on a side earliest are the least likely to be moved.
+	var human := -1
+	for i in range(players.size()):
+		var p: Dictionary = players[i]
+		if str(p.get("id", "")) == mover_id:
+			continue
+		if str(p.get("team_choice", "")) != team:
+			continue
+		if bool(p.get("is_bot", false)):
+			return i
+		human = i
+	return human
 
 @rpc("any_peer")
 func _server_start_match(code: String, player_id: String, sender_peer_id: int = 0) -> void:
@@ -1860,7 +1928,17 @@ func _server_receive_game_action(code: String, player_id: String, action: Dictio
 	if not rooms.has(code):
 		return
 
+	var sender := sender_peer_id
+	if sender == 0:
+		sender = multiplayer.get_remote_sender_id()
+
 	var room: Dictionary = rooms[code]
+	# A watcher has no seat and no say, whatever their client sends. The peer
+	# check below already refuses them, but this says why rather than relying
+	# on a held seat happening to carry a stale peer id.
+	if _is_spectator_peer(room, sender):
+		return
+
 	var player := _find_player_by_id(room.get("players", []), player_id)
 	if player.is_empty() or bool(player.get("is_bot", false)):
 		return

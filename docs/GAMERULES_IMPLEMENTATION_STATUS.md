@@ -50,8 +50,16 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Teams still follow alternating seats, but players may pick a side in the
   lobby. The choice is stored per player and resolved into a seat of that
   side's parity; a player who never picked is pinned to the side they were
-  seated on so nobody else's choice can move them; a full side is refused;
-  bots fill whatever is left (tested)
+  seated on so nobody else's choice can move them; bots fill whatever is left
+  (tested)
+- Asking for a **full** side trades places rather than being refused. Once a
+  room fills up every move is a move into a full side, so refusing meant the
+  teams froze the moment the last player arrived. The mover goes across and one
+  player comes back the other way: a bot first, since it has no preference,
+  otherwise whoever picked that side most recently - so the people who settled
+  earliest are the least likely to be moved. The lobby button reads "Swap to A"
+  instead of "Join A" so it is clear before it is pressed, and the trade can
+  always be made again in the other direction (tested)
 - The next game starts automatically 5 s after a result (9 s after a court, so
   the celebration can finish). The delay is sent in the snapshot so the client
   can show an honest countdown rather than guessing

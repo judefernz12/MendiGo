@@ -90,11 +90,21 @@ to be one, and anybody who did become one was parked in the lobby forever.
 - **Getting to the table:** spectators are included in the lobby, dealer-draw
   and match-start broadcasts, so the game opens for them at the same moment it
   opens for everybody else.
+- **Watch means watch.** Someone who leaves a game and comes back with Watch
+  used to have their seat handed straight back, because the server matched them
+  by id before it looked at what they had asked for: back online, on turn, able
+  to play. Asking to watch now gives the seat up - released outright in the
+  lobby, held and auto-played once the cards are out - and **Join** is what
+  takes it back. A watcher's peer is also refused outright by
+  `_server_receive_game_action`, so it does not rest on a held seat happening
+  to carry a stale peer id.
 - **What they see:** every hand is redacted, *including the seat drawn at the
   bottom of their own screen*, which belongs to a real player. That seat is
   capped and face down like any other, is not clickable, and is named rather
-  than called "You". `is_host` and `must_play_trump` are forced off so a
-  watcher can never inherit the rematch button or somebody else's obligation.
+  than called "You" - it gets a nameplate like every other seat, which it did
+  not before, since for a player the bottom seat is themselves. `is_host` and
+  `must_play_trump` are forced off so a watcher can never inherit the rematch
+  button or somebody else's obligation.
 - **The screen:** a WATCHING badge, no action buttons, no trump-mode dialog, no
   turn ring for a turn they do not have, and the scoreboard names the two sides
   ("TEAM A" / "TEAM B") instead of "your team" / "opponents". A court still gets
