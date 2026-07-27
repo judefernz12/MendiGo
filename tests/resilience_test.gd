@@ -59,6 +59,8 @@ func _run() -> void:
 	host_handover_check()
 	short_table_check()
 	empty_room_check()
+	abandoned_with_watcher_check()
+	lobby_abandoned_with_watcher_check()
 
 	_report()
 
@@ -428,6 +430,63 @@ func empty_room_check() -> void:
 	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 14)
 	ok(not room(code).has("empty_since_ms"), "reconnecting cancels the pending cleanup")
 	ok(server._connected_humans(room(code)) == 1, "the returning player is counted again")
+	server.rooms.clear()
+
+func abandoned_with_watcher_check() -> void:
+	# A room whose players have all gone but which still has someone watching.
+	# Watchers used to cancel the cleanup, which left a zombie: no seated
+	# players, so the server played all four hands to itself; nobody could be
+	# dealt into a running match; and nobody could start a rematch, because the
+	# host role needs a seat. It ran until the process restarted.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 11)
+	server._server_start_match(code, "host", 10)
+	server._server_join_room(code, {"id": "watch", "name": "Watcher"}, true, 12)
+	start_playing(code)
+
+	server._release_peer(10)
+	server._release_peer(11)
+
+	ok(server._connected_humans(room(code)) == 0, "nobody holding a seat is connected any more")
+	ok((room(code).get("spectators", []) as Array).size() == 1, "but somebody is still watching")
+	ok(room(code).has("empty_since_ms"), "the room is marked for cleanup anyway")
+	ok(server._get_room_host_peer(room(code)) == -1, "there is nobody who could start a rematch")
+	ok(server.rooms.has(code), "it is not closed on the spot - a dropped player still has the grace period")
+
+	# A watcher arriving later must not reprieve it either.
+	server._server_join_room(code, {"id": "watch2", "name": "Watcher 2"}, true, 13)
+	ok(room(code).has("empty_since_ms"), "a watcher joining does not cancel the cleanup")
+	ok((room(code).get("spectators", []) as Array).size() == 2, "though they are let in to watch")
+
+	# A seated player coming back is the one thing that does reprieve it.
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 14)
+	ok(server._connected_humans(room(code)) == 1, "a returning player is seated again")
+	server._sweep_empty_room_now(code)
+	ok(server.rooms.has(code), "and the room survives the sweep")
+
+	# With them gone again, the sweep closes it and says so to the watchers.
+	server._release_peer(14)
+	ok(room(code).has("empty_since_ms"), "it is marked again once they leave")
+	server._sweep_empty_room_now(code)
+	ok(not server.rooms.has(code), "the sweep closes a room with only watchers left")
+	ok(not server.peer_to_room.has(12), "the watchers are detached from the closed room")
+	ok(not server.peer_to_room.has(13), "all of them, not just the first")
+	server.rooms.clear()
+
+func lobby_abandoned_with_watcher_check() -> void:
+	# The same thing before a match starts: a lobby nobody is sitting in has no
+	# future either, however many people are watching it.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+	server._server_join_room(code, {"id": "watch", "name": "Watcher"}, true, 11)
+	server._release_peer(10)
+
+	ok(room(code).get("players", []).is_empty(), "the lobby has no players left")
+	ok((room(code).get("spectators", []) as Array).size() == 1, "and one watcher")
+	ok(room(code).has("empty_since_ms"), "an empty lobby is marked for cleanup even with a watcher")
+	server._sweep_empty_room_now(code)
+	ok(not server.rooms.has(code), "and is closed by the sweep")
 	server.rooms.clear()
 
 func _report() -> void:

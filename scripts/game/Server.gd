@@ -95,11 +95,20 @@ func _release_peer(peer_id: int) -> void:
 	# A room with nobody actually connected used to live forever, because
 	# disconnected players still counted as humans. It is kept for a grace
 	# period so a dropped connection can come back to its seat, then dropped.
-	if _connected_humans(room) == 0 and spectators.is_empty():
+	#
+	# Watchers do not count towards that. They hold no seat, they cannot be
+	# dealt into a running match, and the host role needs a seated player - so
+	# nobody in a watchers-only room can ever start anything. Letting them keep
+	# it alive left a zombie: the server played all four seats to itself, for
+	# an audience that could do nothing about it, until the process restarted.
+	if _connected_humans(room) == 0:
 		room["empty_since_ms"] = Time.get_ticks_msec()
 		rooms[code] = room
 		_sweep_empty_room(code)
-		return
+		if spectators.is_empty():
+			return
+		# Watchers are still here, so the table keeps running for them until
+		# the grace period decides the room really is over.
 
 	_broadcast_lobby(code)
 	if room.has("match_state"):
@@ -119,17 +128,46 @@ func _connected_humans(room: Dictionary) -> int:
 
 func _sweep_empty_room(code: String) -> void:
 	await get_tree().create_timer(EMPTY_ROOM_GRACE_S).timeout
+	_sweep_empty_room_now(code)
+
+func _sweep_empty_room_now(code: String) -> void:
+	# The decision, without the three-minute wait in front of it, so it can be
+	# checked directly.
 	if not rooms.has(code):
 		return
 	var room: Dictionary = rooms[code]
 	if not room.has("empty_since_ms"):
 		return
-	if _connected_humans(room) > 0 or not (room.get("spectators", []) as Array).is_empty():
+	# Only a seated player can bring a room back. A watcher cancelling this
+	# sweep is what kept dead rooms alive.
+	if _connected_humans(room) > 0:
 		room.erase("empty_since_ms")
 		rooms[code] = room
 		return
+	_close_room(code, "Everyone left this room, so it has been closed.")
+
+func _close_room(code: String, reason: String) -> void:
+	if not rooms.has(code):
+		return
+
+	var room: Dictionary = rooms[code]
+	# Anyone still attached is looking at a table that is about to stop
+	# existing. Tell them, rather than leaving them on a screen that has
+	# quietly stopped meaning anything.
+	for s_raw in room.get("spectators", []):
+		var watcher_peer := int((s_raw as Dictionary).get("peer_id", -1))
+		if watcher_peer <= 0:
+			continue
+		_network_manager().rpc_id(watcher_peer, "_client_room_error", reason)
+		peer_to_room.erase(watcher_peer)
+
+	for p_raw in room.get("players", []):
+		var player_peer := int((p_raw as Dictionary).get("peer_id", -1))
+		if player_peer > 0:
+			peer_to_room.erase(player_peer)
+
 	rooms.erase(code)
-	print("Closed empty room %s" % code)
+	print("Closed room %s (%s)" % [code, reason])
 
 func _generate_room_code() -> String:
 	const CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -1682,7 +1720,9 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		spectator["is_spectator"] = true
 		spectators.append(spectator)
 		room["spectators"] = spectators
-		room.erase("empty_since_ms")
+		# Deliberately does NOT clear empty_since_ms: a watcher arriving must
+		# not reprieve a room that has no seated players left. The sweep
+		# re-checks anyway, so a seated player joining later is safe.
 	else:
 		players.append(_normalize_player(player, peer_id))
 		room["players"] = _lock_team_choices(_assign_seats(players, int(settings.get("player_count", 4))))

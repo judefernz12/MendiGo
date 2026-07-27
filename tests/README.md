@@ -164,6 +164,16 @@ leaving (the role passes to the next connected player), a short table with bots
 off (refused, with a reason), and everybody leaving (the room is held briefly,
 then closed).
 
+Abandoned rooms get their own checks, because a watcher used to keep one alive
+indefinitely: no seated players, the server playing every hand to itself, and
+no way for anyone to start a rematch since the host role needs a seat. The
+checks require the room to be marked for cleanup as soon as the last *player*
+goes even with watchers present, to survive the sweep if a player comes back,
+to be closed by the sweep if none does, and to detach every watcher when it
+closes. The same applies to a lobby nobody is sitting in. The sweep's decision
+is split out as `_sweep_empty_room_now` so it can be checked without waiting
+out the three-minute grace period.
+
 Leaving is covered on both sides of the deal, because the right answer flips.
 From the lobby, leaving must *remove* the player - a held seat there is a ghost
 nobody can come back to, and it is what made a rejoin get refused as a second

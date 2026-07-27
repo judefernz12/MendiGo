@@ -140,9 +140,28 @@ normally. A non-host still cannot start the match.
 ### Everybody leaves (tested)
 
 Rooms used to leak: disconnected players still counted as human, so a room with
-nobody in it stayed in memory forever. A room with no connected players and no
-spectators is now marked empty and closed after a 3-minute grace period, which
-is long enough for a dropped connection to come back to its seat.
+nobody in it stayed in memory forever. A room with no connected **players** is
+marked empty and closed after a 3-minute grace period, which is long enough for
+a dropped connection to come back to its seat. A player rejoining is the only
+thing that cancels it - the sweep re-checks on the way out, so a stale mark on a
+room that has refilled is harmless.
+
+### Everybody leaves while somebody is watching (tested)
+
+**Watchers do not keep a room alive.** They used to, and it left a zombie: no
+seated players, so the server played every hand to itself; nobody could be
+dealt into a running match; and nobody could start a rematch either, because
+the host role needs a seat. `_get_room_host_peer` returned -1 and the room ran
+until the process restarted. One abandoned browser tab was enough.
+
+The grace period still applies in full - the table keeps running so watchers
+can keep watching, and a dropped player can still come back and revive it. It
+is only at the end of the 3 minutes, with still nobody seated, that the room
+closes. A watcher joining part-way through does not reprieve it.
+
+When a room is closed, anyone still attached is told
+("Everyone left this room, so it has been closed.") and detached from it,
+rather than being left on a screen that has quietly stopped meaning anything.
 
 ### Smaller things
 

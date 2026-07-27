@@ -14,7 +14,7 @@ config/name="MendiGo"
 run/main_scene="uid://c4e6ix1gnx15r"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 boot_splash/bg_color=Color(0.063, 0.098, 0.078, 1)
-config/icon="res://icon.svg"
+config/icon="uid://bbe5c5h64kdfw"
 run/main_scene.dedicated_server="res://scenes/game/Server.tscn"
 
 [autoload]
