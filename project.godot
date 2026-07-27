@@ -20,6 +20,7 @@ run/main_scene.dedicated_server="res://scenes/game/Server.tscn"
 [autoload]
 
 NetworkManager="*uid://87h4akgkexqa"
+Orientation="*res://scripts/ui/Orientation.gd"
 
 [display]
 

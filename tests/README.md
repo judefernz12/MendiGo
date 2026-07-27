@@ -14,6 +14,7 @@ Run from the project root (use the same Godot version as the project):
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/layout_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/trump_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/resilience_test.gd
+& "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/orientation_test.gd
 ```
 
 `rules_test.gd` prints `ALL_RULES_OK` and exits 0 when every rule in
@@ -189,6 +190,20 @@ carrying its real identity, `is_host` and `must_play_trump` both off.
 
 See `docs/CONNECTION_EDGE_CASES.md` for the write-up, including what is
 deliberately *not* handled.
+
+`orientation_test.gd` prints `ALL_ORIENTATION_OK`. It covers the rotate prompt
+and, mostly, the conditions that decide when it appears - getting those wrong
+is worse than having no prompt at all, since a stray overlay is a permanent
+black screen over a game that was working. It checks that real phone
+resolutions read as portrait and the same phones turned read as landscape;
+that 1280x720, a laptop window, a square viewport and a zero-sized viewport all
+read as landscape (a viewport reports zero for a frame while scenes swap, and
+the headless viewport this suite runs in is square); that a desktop run never
+arms the prompt at all; that native handheld builds are pinned to sensor
+landscape so the prompt could never be right there; that the overlay covers the
+whole screen at any size and swallows input; that the wording mentions rotation
+lock; and that the orientation lock is attempted once, only from a real press,
+and never from a finger lift.
 
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
 they wait out the server's real bot and trick-resolve delays; `layout_test.gd`

@@ -9,10 +9,14 @@ Services, no Firebase, no third-party gameplay SDK is needed — the server
 is fully authoritative (shuffling, dealing, validation, scoring, timeouts).
 
 ```text
-Web client (itch.io)  ─┐
-Android client (APK)  ─┼──>  wss://your-app.onrender.com  ──>  Godot headless server
-Desktop client        ─┘         (TLS by Render)               (Docker, port 12345)
+Web (mendigo.fernbuild.com) ─┐
+Android client (APK)        ─┼─> wss://mendigo.onrender.com ─> Godot headless server
+Desktop client              ─┘        (TLS by Render)           (Docker, port 12345)
 ```
+
+All three share one lobby. The server deals in room codes and player ids and
+knows nothing about platforms, so a phone and a laptop can sit at the same
+table by swapping a room code.
 
 Free hosting: **Render free tier** (recommended start) or **Oracle Cloud
 Always Free** (always-on upgrade, no cold starts). Both are documented below.
@@ -21,8 +25,13 @@ Always Free** (always-on upgrade, no cold starts). Both are documented below.
 
 ## Step 1 — One-time editor setup
 
-1. Open the project in Godot 4.6 once (it will import the new fonts/theme).
-2. Editor > Manage Export Templates > download templates for 4.6.
+1. Open the project once in **Godot 4.7.1-stable**
+   (`Desktop\Godot\Godot_v4.7.1-stable_win64\`). Do not use 4.8-dev1: its TLS
+   stack is broken and `wss://` handshakes fail with mbedtls `-0x7b00`.
+2. **Editor > Manage Export Templates > Download and Install.** Nothing can be
+   exported without these, and they must be the *same version as the editor*.
+   If you later update Godot, download the templates again or every export
+   will fail with "export templates not found".
 
 ## Step 2 — Deploy the server (Render free tier)
 
@@ -47,48 +56,184 @@ waits ~30-60 s while it wakes. Active games keep it awake. If that bothers
 players later, move to Oracle (bottom of this file) — clients don't change,
 only the URL.
 
-## Step 3 — Web client (itch.io, free)
+## Step 3 — Android client (APK)
 
-1. Project > Export > **Web** preset (thread support already disabled, so
-   itch.io needs no special settings) > Export Project.
-2. Zip the export folder contents (index.html at the zip root).
-3. itch.io > Upload new project > Kind: **HTML** > upload zip > tick
-   "This file will be played in the browser".
-4. Set embed size to something like 1280x720 and allow fullscreen.
+### 3a. One-time tool setup
 
-## Step 4 — Android client (free)
+You need two things Godot does not ship with: a Java JDK, and the Android SDK.
 
-Requirements (one-time):
+1. **Install JDK 17.** Godot 4 needs 17 specifically — 21 and 24 are *not*
+   drop-in replacements for the Android build tools. Get "Temurin 17 (LTS),
+   JDK, Windows x64, .msi" from <https://adoptium.net>. Tick
+   "Set JAVA_HOME variable" during install.
 
-1. Install **JDK 17** (Temurin) and **Android Studio** (for the SDK).
-2. Godot Editor > Editor Settings > Export > Android: set the paths to the
-   SDK (`%LOCALAPPDATA%\Android\Sdk`) and Java.
-3. Create a debug keystore if you don't have one:
+2. **Install the Android SDK.** Easiest route is Android Studio from
+   <https://developer.android.com/studio> — run it once and accept the default
+   "Standard" setup, which downloads the SDK and build tools. You never have to
+   open Android Studio again; Godot only wants the files it installed. They
+   land in `%LOCALAPPDATA%\Android\Sdk`.
+
+3. **Create a debug keystore.** Android refuses to install an unsigned app.
+   A debug key is fine for testing (not for the Play Store). In PowerShell:
 
 ```powershell
-keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999
+cd $env:USERPROFILE
+& "$env:JAVA_HOME\bin\keytool.exe" -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999
 ```
 
-   and point Editor Settings > Export > Android > Debug Keystore at it
-   (user: `androiddebugkey`, password: `android`).
+   That writes `debug.keystore` into your user folder. The password is
+   literally `android` and the alias is `androiddebugkey` — those are the
+   Android convention, not placeholders to change.
 
-Then: Project > Export > **Android** preset > Export Project (APK).
+4. **Point Godot at all three.** In Godot: **Editor > Editor Settings**, then
+   search for "android" in the search box at the top. Fill in:
 
-- The preset already enables the **INTERNET permission** (required for
-  multiplayer) and immersive landscape mode.
-- Android blocks cleartext `ws://` by default — we use `wss://`, so nothing
-  extra is needed.
-- Install the APK on your phone (enable "install unknown apps") and test
-  against the live server together with a browser client.
-- For the Play Store later: switch the preset to Gradle build + AAB format
-  and sign with a release keystore.
+   - `Export > Android > Android Sdk Path` → `C:\Users\<you>\AppData\Local\Android\Sdk`
+   - `Export > Android > Java Sdk Path` → your JDK 17 folder
+     (e.g. `C:\Program Files\Eclipse Adoptium\jdk-17...`)
+   - `Export > Android > Debug Keystore` → `C:\Users\<you>\debug.keystore`
+   - `Export > Android > Debug Keystore User` → `androiddebugkey`
+   - `Export > Android > Debug Keystore Pass` → `android`
+
+   Close Editor Settings.
+
+### 3b. Export the APK
+
+1. **Project > Export.** Select the **Android** preset in the list.
+2. Look at the bottom of the window. If it says anything in **red**, the
+   export will not work — it names exactly what is missing (usually a wrong
+   SDK or Java path). Fix that first.
+3. Click **Export Project**.
+4. Choose where to save. The preset already suggests
+   `..\builds\mendigo-android\MendiGo.apk` — note that is a folder *next to*
+   the project folder, not inside it. Create `builds` if it does not exist.
+5. **Untick "Export With Debug"** for a build you hand to other people. Leave
+   it ticked if you want Godot's error output while testing.
+6. Save. The APK takes a minute or two the first time.
+
+### 3c. Put it on the phone
+
+1. Copy the `.apk` to the phone (USB cable, Google Drive, email to yourself).
+2. Tap it in the phone's file manager.
+3. Android will refuse and offer a settings screen — allow that app (usually
+   your file manager or browser) to **install unknown apps**, then tap the
+   APK again.
+4. Open MendiGo. It should start in landscape on its own: the project is set
+   to sensor landscape, so the phone handles this and the rotate prompt never
+   appears on the native app.
+
+Notes:
+
+- The preset already has the **INTERNET permission** on. Without it the game
+  cannot reach the server at all.
+- Android blocks plain `ws://` by default. We use `wss://`, so nothing extra
+  is needed.
+- For the Play Store later you need a **release** keystore (same `keytool`
+  command, your own alias and password, kept safe — losing it means you can
+  never update the app) and the preset switched to Gradle build + AAB.
+
+## Step 4 — Web client
+
+### 4a. Export the files
+
+1. **Project > Export.** Select the **Web** preset.
+2. Click **Export Project**, and save to `..\builds\mendigo-web\index.html`.
+   Again: `builds` is a folder *next to* the project folder.
+3. You get about half a dozen files — `index.html`, `index.wasm`,
+   `index.pck`, `index.js` and so on. **All of them are needed.** The `.wasm`
+   is large (tens of MB); that is normal.
+
+Thread support is already off in this preset. That matters more than it
+sounds: it means the build does not use `SharedArrayBuffer`, so it needs **no
+special COOP/COEP server headers** and works in iOS Safari. That is the single
+most common thing that makes Godot web exports impossible to host, and you are
+already clear of it. Do not turn thread support on.
+
+### 4b. Test it locally first
+
+You **cannot** just double-click `index.html`. Browsers block `file://` pages
+from loading `.wasm`, and you will get a black screen. Serve it over HTTP:
+
+```powershell
+cd ..\builds\mendigo-web
+python -m http.server 8000
+```
+
+Then open <http://localhost:8000> in your browser. (If you do not have Python,
+the Godot editor's **Remote Debug > Run in Browser** button does the same job.)
+
+### 4c. Put it online at mendigo.fernbuild.com
+
+The simplest host for a first deploy is **Netlify Drop** — no account needed to
+try it, no build config, drag and drop.
+
+1. Go to <https://app.netlify.com/drop>.
+2. Drag the whole `mendigo-web` folder onto the page.
+3. It gives you a URL like `random-name-123.netlify.app`. Open it on your
+   phone and check the game runs.
+4. Create a free account when prompted, so the site is yours and keeps its URL.
+5. In the Netlify site: **Domain management > Add a domain** →
+   `mendigo.fernbuild.com`. Netlify will tell you to add a DNS record.
+6. In **Namecheap**: Dashboard → Domain List → **Manage** next to
+   `fernbuild.com` → **Advanced DNS** tab → **Add New Record**:
+
+   - Type: **CNAME Record**
+   - Host: `mendigo`
+   - Value: your Netlify address, e.g. `random-name-123.netlify.app`
+   - TTL: Automatic
+
+   Save. DNS usually takes 10-30 minutes, occasionally a few hours.
+7. Netlify issues the HTTPS certificate automatically once DNS resolves.
+   **HTTPS is not optional here** — the page must be `https://` and it
+   connects to `wss://`, which browsers require to match.
+
+Cloudflare Pages is an equally good free alternative and is worth switching to
+later if you want push-to-deploy from GitHub. One catch if you do: the Web
+preset exports to `..\builds\`, which is *outside* the git repo, so a
+repo-connected build would not see it. You would need to change the export path
+to somewhere inside the project first.
+
+### 4d. Phones in a browser
+
+A web page cannot rotate a phone. `screen.orientation.lock()` is the only API
+that exists anywhere, it requires fullscreen, and **Safari does not implement
+it on any platform** — iPhone Safari has no element fullscreen either. So:
+
+- **Every touch browser** gets a "Turn your phone sideways" overlay whenever
+  the viewport is portrait, including a note about rotation lock (a player
+  with rotation lock on will otherwise turn the phone, see nothing happen, and
+  have no idea why). This is `scripts/ui/Orientation.gd`, an autoload, so it
+  covers every screen in the game.
+- **Android browsers** additionally get real fullscreen and a landscape lock,
+  attempted once on the player's first tap, because browsers only grant those
+  inside a user gesture.
+- **Desktop browsers and the native Android app never see the overlay.** The
+  app is pinned landscape by the project settings, and a desktop window is the
+  player's own business.
+
+The behaviour is decided by capability, not by sniffing the browser name:
+`OS.has_feature("web")` plus `DisplayServer.is_touchscreen_available()`, and
+the JavaScript checks for `requestFullscreen` and `screen.orientation.lock`
+existing before calling them. Name-sniffing would get iPadOS wrong, since
+Safari there requests desktop sites by default and does not report as iOS.
 
 ## Step 5 — Verify online multiplayer
 
-1. Phone (APK) + PC browser (itch.io page), both on the live server.
+1. Phone (APK) + PC browser (your domain), both on the live server.
 2. Create a room on one, join by code on the other, add bots, start.
 3. Play two full games (dealer must rotate after game 1).
 4. Test a 6-player and an 8-player room with bots.
+5. On a phone browser, hold it upright and check the rotate prompt appears,
+   then turn it and check the prompt goes away and the game is playable.
+6. Tap cards on the phone: one tap must select, a second tap must deselect.
+
+## Keeping the three builds in step
+
+The client and the server share `scripts/network/NetworkManager.gd`, so their
+RPC signatures must match exactly. Whenever `Server.gd` or `NetworkManager.gd`
+changes you must re-export **all** of: the dedicated server, the web build, and
+the APK. An old APK talking to a new server produces RPC errors, not a helpful
+message.
 
 ## Local testing (optional)
 
