@@ -59,6 +59,13 @@ correctly. It feeds real server snapshots into the real game scene and checks:
 - a court raises the celebration overlay with its banner and confetti, the
   result chip and banner message both say COURT, resending the same result
   does not stack a second overlay, and a new game re-arms it
+- the same table, opened as a spectator, gives nothing away and does nothing:
+  the seat drawn at the bottom belongs to somebody else, so it must stay face
+  down, capped like every other seat, unclickable and named rather than called
+  "You". The check deliberately hands the watcher a snapshot that puts that
+  seat on turn with the table idle - the one moment a seated player would be
+  free to act - and requires that clicking still selects nothing and no action
+  button appears
 
 `multiplayer_test.gd` prints `ALL_MULTIPLAYER_OK`. It runs two clients in one
 process from their own snapshots and checks they cannot desync: both must name
@@ -72,6 +79,14 @@ server output and checks the team picker: each side lists the right players,
 empty seats read as bots, the headers show how full each side is, the join
 buttons reflect where the local player actually sits, and only the host sees
 the start button.
+
+It also covers watching and the handoff into the game. A watcher must not be
+shown seat controls that would silently do nothing, and the lobby must count
+the watchers for the players. The handoff check opens a lobby that already has
+a game entry waiting - the case where the server's answer beat the scene into
+existence - and requires it to consume that entry and hand the game scene the
+match, the whole table, and the local player marked. A watcher's handoff must
+carry `is_spectator` and never the host role, even on the host's connection.
 
 `layout_test.gd` prints `ALL_LAYOUT_OK`. "The table looks cluttered" is
 otherwise untestable, so the rules are written down here. It deals a real game,
@@ -124,8 +139,19 @@ joining a game already in progress (spectator, never a seat), two clients on
 one machine sharing a saved identity (the live seat cannot be stolen), the host
 leaving (the role passes to the next connected player), a short table with bots
 off (refused, with a reason), and everybody leaving (the room is held briefly,
-then closed). See `docs/CONNECTION_EDGE_CASES.md` for the write-up, including
-what is deliberately *not* handled.
+then closed).
+
+It also pins down **where a client is sent when it arrives after the lobby**,
+which is the check that would have caught the rejoin bug: `_room_entry_for`
+must return the dealer-draw screen while the dealer is being picked and the
+match setup *plus the current state* once a game is running, and it must build
+that state for the returning player's own seat. Empty - "stay in the lobby" -
+is only correct while the room really is in the lobby. The same checks run for
+a watcher, and assert their snapshot leaks nothing: no hand face up, no card
+carrying its real identity, `is_host` and `must_play_trump` both off.
+
+See `docs/CONNECTION_EDGE_CASES.md` for the write-up, including what is
+deliberately *not* handled.
 
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
 they wait out the server's real bot and trick-resolve delays; `layout_test.gd`

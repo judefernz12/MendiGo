@@ -369,7 +369,94 @@ func _run() -> void:
 	ok(not room_ui.court_celebrated, "a new game re-arms the celebration")
 	ok(not str(room_ui.phase_message_label.text).contains("COURT"), "the court message clears when a new game starts")
 
+	await spectator_view_check(net)
+
 	_report()
+
+# --- watching the same table without a seat --------------------------------
+
+func spectator_view_check(net: Node) -> void:
+	# A watcher renders the same table, but the seat drawn at the bottom of the
+	# screen belongs to somebody else: nothing there may be face up or clickable.
+	var players_setup: Array = []
+	for p in srv_room().get("players", []):
+		players_setup.append({
+			"id": str(p.get("id", "")),
+			"name": str(p.get("name", "")),
+			"seat_id": str(p.get("seat_id", "")),
+			"is_bot": bool(p.get("is_bot", false)),
+			"is_local": false
+		})
+	net.pending_match_setup = {
+		"players": players_setup,
+		"phase": "server_match",
+		"dealer_seat_id": str(st().get("dealer_seat_id", "")),
+		"trump_holder_seat_id": str(st().get("trump_holder_seat_id", "")),
+		"dealer_draw_cards": [],
+		"is_spectator": true,
+		"is_host": false
+	}
+	net.latest_game_state_snapshot = {}
+
+	var watcher: Node = load("res://scenes/game/GameRoom3D.tscn").instantiate()
+	root.add_child(watcher)
+	await process_frame
+	ok(bool(watcher.is_spectator), "the game scene knows it is being watched")
+
+	watcher._on_snapshot_received(server._build_spectator_snapshot(srv_room()))
+	await process_frame
+	var deadline := Time.get_ticks_msec() + 20000
+	while watcher.is_rendering and Time.get_ticks_msec() < deadline:
+		await process_frame
+	await process_frame
+
+	var bottom: Array = watcher.hand_cards.get("my", [])
+	ok(not bottom.is_empty(), "the bottom seat is still drawn")
+	var face_up := 0
+	var clickable := 0
+	for card in bottom:
+		if card.is_face_up:
+			face_up += 1
+		if card.clickable:
+			clickable += 1
+	ok(face_up == 0, "the bottom seat's cards stay face down for a watcher")
+	ok(clickable == 0, "and cannot be picked up")
+	ok(bottom.size() <= watcher._max_opponent_cards(), "the bottom seat is capped like every other seat")
+
+	# Idle table, and a snapshot that puts the bottom seat on turn: a seated
+	# player would be free to act here, so this is where a watcher must not be.
+	var on_turn: Dictionary = server._build_spectator_snapshot(srv_room())
+	var on_turn_state: Dictionary = on_turn["game_state"]
+	on_turn_state["phase"] = "playing"
+	on_turn_state["current_turn_index"] = 0
+	on_turn_state["trick_is_resolving"] = false
+	on_turn_state["revealing_trump"] = false
+	on_turn["game_state"] = on_turn_state
+	watcher._on_snapshot_received(on_turn)
+	await process_frame
+	var turn_deadline := Time.get_ticks_msec() + 20000
+	while watcher.is_rendering and Time.get_ticks_msec() < turn_deadline:
+		await process_frame
+	await process_frame
+
+	ok(not watcher.my_turn, "a watcher is never on turn, whatever the snapshot says")
+	ok(not watcher.table_busy, "the table really is idle for this check")
+	ok(not watcher._can_interact(), "a watcher can never act on an idle table")
+	ok(not watcher.play_button.visible, "no play button")
+	ok(not watcher.open_trump_button.visible, "no reveal-trump button")
+	ok(not watcher.confirm_hidden_trump_button.visible, "no hide-trump button")
+	ok(not watcher.arrange_button.visible, "no sort button for a hand they do not hold")
+	ok(watcher.spectator_badge != null and watcher.spectator_badge.visible, "the screen says it is watching")
+	ok(watcher._display_name("my") != "You", "the bottom seat is named, not called 'You'")
+
+	# Clicking anyway must do nothing.
+	var current: Array = watcher.hand_cards.get("my", [])
+	if not current.is_empty():
+		watcher._on_card_clicked(current[0])
+		ok(watcher.selected_card == null, "clicking a card a watcher does not own selects nothing")
+
+	watcher.queue_free()
+	await process_frame
 
 func _report() -> void:
 	print("")

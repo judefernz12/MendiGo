@@ -64,8 +64,16 @@ the automated checks in `tests/` - see `tests/README.md`.
 - Server turn deadlines (20 s play, 25 s choices) with autoplay
 - Bots play legal cards after a short think delay
 - Seat reservation and full-state resend on reconnect; an absent player's hand
-  is played by the server at bot speed rather than stalling on the deadline
-- Spectator snapshots redacted; nobody may take a seat once the deal has begun
+  is played by the server at bot speed rather than stalling on the deadline.
+  A reconnecting client is also sent back to the table - the dealer-draw screen
+  or the match itself, depending on where the room is - instead of being left
+  on the team picker (tested)
+- Nobody may take a seat once the deal has begun. Latecomers, and anyone who
+  asks to watch, become spectators: every hand redacted including the seat
+  drawn at the bottom of their own screen, no host role, no obligations, no
+  way to act. They follow the lobby, the dealer draw and the match start along
+  with everybody else, and there is a Watch Instead button to become one
+  deliberately (tested)
 - See `docs/CONNECTION_EDGE_CASES.md` for the full disconnect/reconnect/join
   audit, what is handled and what is deliberately left alone
 
@@ -182,7 +190,7 @@ Notable consequences of that check:
 ## Not implemented (non-blocking)
 
 - Public matchmaking, friends invite, chat and emotes
-- Dedicated spectator UI
+- Promoting a spectator into a seat that a player has left for good
 - Sound, music, haptics, settings screen
 - Card back / table theme cosmetics
 - Reconnect restores state, not mid-animation position

@@ -49,6 +49,9 @@ func _run() -> void:
 
 	drop_out_check()
 	mid_game_join_check()
+	rejoin_entry_check()
+	spectator_check()
+	spectators_disabled_check()
 	identity_conflict_check()
 	host_handover_check()
 	short_table_check()
@@ -114,6 +117,102 @@ func mid_game_join_check() -> void:
 	server._server_join_room(code2, {"id": "p3", "name": "P3"}, false, 22)
 	ok(player_in(code2, "p3").is_empty(), "a free seat is still not handed out once the match has started")
 	ok((room(code2).get("spectators", []) as Array).size() == 1, "they watch instead")
+	server.rooms.clear()
+
+# --- what a client is sent when it arrives after the lobby -----------------
+
+func start_playing(code: String) -> void:
+	# Skips the dealer draw and puts the room into a real match.
+	var r: Dictionary = room(code)
+	r["phase"] = "match"
+	r["match_state"] = server._deal_remaining_cards(server._create_match_state(r))
+	server.rooms[code] = r
+
+func rejoin_entry_check() -> void:
+	# The bug: rejoining a running game landed on the team picker and stayed
+	# there, because the only thing sent was a snapshot the lobby ignores.
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+	server._server_join_room(code, {"id": "guest", "name": "Guest"}, false, 11)
+
+	ok(server._room_entry_for(room(code), 11, false).is_empty(), "a player in a lobby belongs in the lobby")
+
+	server._server_start_match(code, "host", 10)
+	var draw_entry: Dictionary = server._room_entry_for(room(code), 11, false)
+	ok(str(draw_entry.get("method", "")) == "_client_dealer_draw_updated", "rejoining during the dealer draw opens the draw screen")
+	ok(not draw_entry.has("snapshot"), "there is no game state to hand over yet")
+
+	var guest_seat := str(player_in(code, "guest").get("seat_id", ""))
+	start_playing(code)
+
+	var entry: Dictionary = server._room_entry_for(room(code), 11, false)
+	ok(str(entry.get("method", "")) == "_client_start_match", "rejoining a running game is sent to the table, not the lobby")
+	ok(entry.has("snapshot"), "and is handed the current state along with it")
+
+	var setup: Dictionary = entry.get("payload", {})
+	ok(not bool(setup.get("is_spectator", true)), "a returning player comes back as a player")
+	ok((setup.get("players", []) as Array).size() == 4, "the setup carries the whole table")
+
+	var gs: Dictionary = (entry.get("snapshot", {}) as Dictionary).get("game_state", {})
+	var my_info: Dictionary = (gs.get("seat_info", {}) as Dictionary).get("my", {})
+	ok(str(my_info.get("seat_id", "")) == guest_seat, "the state is built for their own seat")
+	ok(not (gs.get("hands", {}) as Dictionary).get("my", []).is_empty(), "their own hand comes back with them")
+	server.rooms.clear()
+
+# --- watching --------------------------------------------------------------
+
+func spectator_check() -> void:
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": true})
+
+	# Asking to watch a room that has not started yet is allowed: no seat taken.
+	server._server_join_room(code, {"id": "watcher", "name": "Watcher"}, true, 40)
+	ok(player_in(code, "watcher").is_empty(), "a watcher never takes a seat")
+	ok((room(code).get("spectators", []) as Array).size() == 1, "a watcher is recorded as a spectator")
+	ok(str(server.peer_to_room.get(40, "")) == code, "the watcher's connection is tied to the room")
+	ok(server._room_entry_for(room(code), 40, true).is_empty(), "a watcher waits in the lobby until the game starts")
+
+	server._server_start_match(code, "host", 10)
+	var draw: Dictionary = server._room_entry_for(room(code), 40, true)
+	ok(str(draw.get("method", "")) == "_client_dealer_draw_updated", "a watcher is taken to the table when the match starts")
+	ok(bool((draw.get("payload", {}) as Dictionary).get("is_spectator", false)), "and is told they are watching")
+
+	start_playing(code)
+	var entry: Dictionary = server._room_entry_for(room(code), 40, true)
+	ok(str(entry.get("method", "")) == "_client_start_match", "a watcher joining a running game opens the table")
+	ok(bool((entry.get("payload", {}) as Dictionary).get("is_spectator", false)), "the setup marks them as a watcher")
+
+	var gs: Dictionary = (entry.get("snapshot", {}) as Dictionary).get("game_state", {})
+	ok(bool(gs.get("is_spectator", false)), "the snapshot marks them as a watcher")
+	ok(not bool(gs.get("is_host", true)), "a watcher never inherits the rematch button")
+	ok(not bool(gs.get("must_play_trump", true)), "nor anybody else's obligation to play a trump")
+
+	# Nothing in any hand may be readable - including the seat the client draws
+	# at the bottom of its own screen, which belongs to a real player.
+	var hands: Dictionary = gs.get("hands", {})
+	var faces_up := 0
+	var real_ranks := 0
+	for view in hands.keys():
+		for c_raw in hands[view]:
+			var c: Dictionary = c_raw
+			if bool(c.get("is_face_up", false)):
+				faces_up += 1
+			if int(c.get("id", 0)) != 0:
+				real_ranks += 1
+	ok(not (hands.get("my", []) as Array).is_empty(), "a watcher still sees how many cards each seat holds")
+	ok(faces_up == 0, "no hand is face up for a watcher, the bottom seat included")
+	ok(real_ranks == 0, "and no card carries its real identity")
+	server.rooms.clear()
+
+func spectators_disabled_check() -> void:
+	server.rooms.clear()
+	var code := make_room({"player_count": 4, "target_score": 15, "bots_enabled": true, "spectators_enabled": false})
+	server._server_start_match(code, "host", 10)
+
+	server._server_join_room(code, {"id": "watcher", "name": "Watcher"}, true, 41)
+	ok((room(code).get("spectators", []) as Array).is_empty(), "a room with spectators off takes none")
+	ok(player_in(code, "watcher").is_empty(), "and does not seat them either")
+	ok(not server.peer_to_room.has(41), "the refused connection is not attached to the room")
 	server.rooms.clear()
 
 # --- two clients on one machine sharing a saved identity --------------------

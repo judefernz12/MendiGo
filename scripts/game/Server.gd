@@ -278,13 +278,25 @@ func _broadcast_lobby(code: String) -> void:
 
 	var room: Dictionary = rooms[code]
 	var players: Array = room.get("players", [])
-	var settings: Dictionary = room.get("settings", _normalize_room_settings({}))
+	var spectators: Array = room.get("spectators", [])
+	var settings: Dictionary = (room.get("settings", _normalize_room_settings({})) as Dictionary).duplicate(true)
+	# Carried on the settings payload so the lobby can say how many people are
+	# watching without another rpc signature to keep in step on both sides.
+	settings["spectator_count"] = spectators.size()
 	for p_raw in players:
 		var p: Dictionary = p_raw
 		var peer_id := int(p.get("peer_id", -1))
 		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
 		_network_manager().rpc_id(peer_id, "_client_lobby_updated", players, settings)
+
+	# Spectators sit in the same lobby until the host starts, so they need the
+	# same updates - otherwise their screen never changes at all.
+	for s_raw in spectators:
+		var spectator_peer := int((s_raw as Dictionary).get("peer_id", -1))
+		if spectator_peer <= 0:
+			continue
+		_network_manager().rpc_id(spectator_peer, "_client_lobby_updated", players, settings)
 
 func _fill_bots(players: Array, player_count: int) -> Array:
 	# Bots are appended last and never pick a team, so they take whatever seats
@@ -696,6 +708,11 @@ func _build_spectator_snapshot(room: Dictionary) -> Dictionary:
 		hands[view_name] = redacted
 	client_state["hands"] = hands
 	client_state["is_spectator"] = true
+	# The snapshot is built from seat 0's point of view, so these two would
+	# otherwise be that seat's: a watcher must never own the rematch button or
+	# inherit somebody else's obligation to play a trump.
+	client_state["is_host"] = false
+	client_state["must_play_trump"] = false
 	snapshot["game_state"] = client_state
 	return snapshot
 
@@ -1181,27 +1198,44 @@ func _finish_trick_after_pause(code: String) -> void:
 	rooms[code] = room
 	_broadcast_match_state(code)
 
-func _broadcast_dealer_draw(code: String) -> void:
-	var room: Dictionary = rooms.get(code, {})
-	var data := {
+func _dealer_draw_payload(room: Dictionary, as_spectator: bool) -> Dictionary:
+	return {
 		"players": room.get("players", []),
 		"phase": room.get("phase", "dealer_draw"),
 		"dealer_draw_cards": room.get("dealer_draw_cards", []),
 		"dealer_seat_id": room.get("dealer_seat_id", ""),
 		"trump_holder_seat_id": room.get("trump_holder_seat_id", ""),
 		"trump_mode": room.get("trump_mode", ""),
-		"choice_time_limit": CHOICE_DEADLINE_S
+		"choice_time_limit": CHOICE_DEADLINE_S,
+		"is_spectator": as_spectator
 	}
+
+func _broadcast_dealer_draw(code: String) -> void:
+	var room: Dictionary = rooms.get(code, {})
+	var data := _dealer_draw_payload(room, false)
+	var watcher_data := _dealer_draw_payload(room, true)
+	var choosing_mode: bool = str(room.get("phase", "")) == "trump_mode_choice"
 
 	for p_raw in room.get("players", []):
 		var p: Dictionary = p_raw
 		var peer_id := int(p.get("peer_id", -1))
 		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
-		if room.get("phase", "") == "trump_mode_choice":
+		if choosing_mode:
 			_network_manager().rpc_id(peer_id, "_client_trump_mode_choice_requested", data)
 		else:
 			_network_manager().rpc_id(peer_id, "_client_dealer_draw_updated", data)
+
+	# The dealer draw is the first thing on the table, so it is also the screen
+	# a spectator has to be taken to. Without this they stayed in the lobby.
+	for s_raw in room.get("spectators", []):
+		var watcher_peer := int((s_raw as Dictionary).get("peer_id", -1))
+		if watcher_peer <= 0:
+			continue
+		if choosing_mode:
+			_network_manager().rpc_id(watcher_peer, "_client_trump_mode_choice_requested", watcher_data)
+		else:
+			_network_manager().rpc_id(watcher_peer, "_client_dealer_draw_updated", watcher_data)
 
 func _decide_dealer_from_draw(code: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -1258,17 +1292,22 @@ func _maybe_auto_choose_trump_for_bot(code: String) -> void:
 		return
 	_apply_trump_mode_choice(code, trump_holder, "hidden")
 
-func _start_server_match_scene(code: String) -> void:
-	var room: Dictionary = rooms[code]
-	var setup := {
+func _match_entry_setup(room: Dictionary, as_spectator: bool) -> Dictionary:
+	return {
 		"players": room.get("players", []),
-		"host_peer_id": _get_room_host_peer(room),
+		"host_peer_id": -1 if as_spectator else _get_room_host_peer(room),
 		"phase": "server_match",
 		"dealer_seat_id": room.get("dealer_seat_id", "seat_0"),
 		"trump_holder_seat_id": room.get("trump_holder_seat_id", "seat_1"),
 		"trump_mode": "",
-		"server_authoritative": true
+		"server_authoritative": true,
+		"is_spectator": as_spectator
 	}
+
+func _start_server_match_scene(code: String) -> void:
+	var room: Dictionary = rooms[code]
+	var setup := _match_entry_setup(room, false)
+	var watcher_setup := _match_entry_setup(room, true)
 
 	for p_raw in room.get("players", []):
 		var p: Dictionary = p_raw
@@ -1276,6 +1315,56 @@ func _start_server_match_scene(code: String) -> void:
 		if bool(p.get("is_bot", false)) or peer_id <= 0:
 			continue
 		_network_manager().rpc_id(peer_id, "_client_start_match", setup)
+
+	for s_raw in room.get("spectators", []):
+		var watcher_peer := int((s_raw as Dictionary).get("peer_id", -1))
+		if watcher_peer <= 0:
+			continue
+		_network_manager().rpc_id(watcher_peer, "_client_start_match", watcher_setup)
+
+func _seat_id_for_peer(room: Dictionary, peer_id: int) -> String:
+	for p_raw in room.get("players", []):
+		var p: Dictionary = p_raw
+		if int(p.get("peer_id", -1)) == peer_id:
+			return str(p.get("seat_id", "seat_0"))
+	return "seat_0"
+
+func _room_entry_for(room: Dictionary, peer_id: int, as_spectator: bool) -> Dictionary:
+	# What a peer arriving after the lobby has to be sent so it ends up on the
+	# table instead of the team picker. Empty means "the lobby is the right
+	# place for this client". Kept separate from the send so the decision can
+	# be checked directly.
+	if str(room.get("phase", "lobby")) == "lobby":
+		return {}
+
+	if room.has("match_state"):
+		return {
+			"method": "_client_start_match",
+			"payload": _match_entry_setup(room, as_spectator),
+			"snapshot": _build_spectator_snapshot(room) if as_spectator else _build_client_snapshot(room, _seat_id_for_peer(room, peer_id))
+		}
+
+	# Still picking a dealer: that screen is part of the game scene too.
+	return {
+		"method": "_client_dealer_draw_updated",
+		"payload": _dealer_draw_payload(room, as_spectator)
+	}
+
+func _send_room_entry(peer_id: int, code: String, as_spectator: bool) -> void:
+	# Puts a peer that arrives after the lobby straight onto the table. Sending
+	# only the match state was not enough: the lobby scene does not listen for
+	# game snapshots, so a reconnecting player sat on the team picker forever
+	# while the game carried on without them.
+	if peer_id <= 0 or not rooms.has(code):
+		return
+
+	var entry := _room_entry_for(rooms[code], peer_id, as_spectator)
+	if entry.is_empty():
+		return
+
+	_network_manager().rpc_id(peer_id, str(entry["method"]), entry["payload"])
+	if entry.has("snapshot"):
+		_network_manager().rpc_id(peer_id, "_client_receive_game_state", entry["snapshot"])
 
 func _apply_trump_mode_choice(code: String, seat_id: String, mode: String) -> void:
 	var room: Dictionary = rooms[code]
@@ -1485,6 +1574,9 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		peer_id = multiplayer.get_remote_sender_id()
 	code = code.to_upper()
 	if not rooms.has(code):
+		# This used to return in silence, which on the client looked exactly
+		# like a button that does nothing.
+		_network_manager().rpc_id(peer_id, "_client_room_error", "No room with code %s. Check the code and try again." % code)
 		return
 
 	var room: Dictionary = rooms[code]
@@ -1509,18 +1601,23 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		room.erase("empty_since_ms")
 		rooms[code] = room
 		peer_to_room[peer_id] = code
-		_network_manager().rpc_id(peer_id, "_client_room_joined", code)
+		_network_manager().rpc_id(peer_id, "_client_room_joined", code, false)
 		_broadcast_lobby(code)
+		# Back to the table, not to the team picker.
+		_send_room_entry(peer_id, code, false)
 		if room.has("match_state"):
+			# Everyone else needs to see them come back online too.
 			_broadcast_match_state(code)
 		return
 
 	# Seats are fixed when the match starts: a newcomer would have no hand and
 	# no place in the deal, so they watch instead.
 	var match_running := str(room.get("phase", "lobby")) != "lobby"
-	if as_spectator or match_running or players.size() >= int(settings.get("player_count", 4)):
+	var joined_as_spectator := as_spectator or match_running or players.size() >= int(settings.get("player_count", 4))
+	if joined_as_spectator:
 		if not bool(settings.get("spectators_enabled", true)):
-			_network_manager().rpc_id(peer_id, "_client_room_error", "This room is full and is not taking spectators.")
+			var why := "That game has already started" if match_running else "This room is full"
+			_network_manager().rpc_id(peer_id, "_client_room_error", "%s and is not taking spectators." % why)
 			return
 		var spectators: Array = room.get("spectators", [])
 		var spectator := _normalize_player(player, peer_id)
@@ -1528,14 +1625,17 @@ func _server_join_room(code: String, player: Dictionary, as_spectator: bool = fa
 		spectator["is_spectator"] = true
 		spectators.append(spectator)
 		room["spectators"] = spectators
+		room.erase("empty_since_ms")
 	else:
 		players.append(_normalize_player(player, peer_id))
 		room["players"] = _lock_team_choices(_assign_seats(players, int(settings.get("player_count", 4))))
 
 	rooms[code] = room
 	peer_to_room[peer_id] = code
-	_network_manager().rpc_id(peer_id, "_client_room_joined", code)
+	_network_manager().rpc_id(peer_id, "_client_room_joined", code, joined_as_spectator)
 	_broadcast_lobby(code)
+	# A room that is already playing hands the newcomer the table right away.
+	_send_room_entry(peer_id, code, joined_as_spectator)
 
 @rpc("any_peer")
 func _server_set_ready(code: String, player_id: String, is_ready: bool, sender_peer_id: int = 0) -> void:
@@ -1771,15 +1871,25 @@ func _server_request_game_state(code: String, player_id: String, sender_peer_id:
 		return
 
 	var room: Dictionary = rooms[code]
-	var player := _find_player_by_id(room.get("players", []), player_id)
-	if player.is_empty():
-		return
-	if not _is_sender_for_player(player, sender_peer_id):
-		return
 	if not room.has("match_state"):
 		return
 
-	_network_manager().rpc_id(int(player.get("peer_id", -1)), "_client_receive_game_state", _build_client_snapshot(room, str(player.get("seat_id", ""))))
+	var player := _find_player_by_id(room.get("players", []), player_id)
+	if not player.is_empty():
+		if not _is_sender_for_player(player, sender_peer_id):
+			return
+		_network_manager().rpc_id(int(player.get("peer_id", -1)), "_client_receive_game_state", _build_client_snapshot(room, str(player.get("seat_id", ""))))
+		return
+
+	# Spectators ask for the same thing on their first frame; they are not in
+	# the players list, so the lookup above misses them.
+	var sender := sender_peer_id
+	if sender == 0:
+		sender = multiplayer.get_remote_sender_id()
+	for s_raw in room.get("spectators", []):
+		if int((s_raw as Dictionary).get("peer_id", -1)) == sender:
+			_network_manager().rpc_id(sender, "_client_receive_game_state", _build_spectator_snapshot(room))
+			return
 
 @rpc("any_peer")
 @warning_ignore("unused_parameter")

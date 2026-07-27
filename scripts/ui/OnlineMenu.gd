@@ -14,9 +14,11 @@ var target_score_option: OptionButton = null
 var direction_option: OptionButton = null
 var bots_toggle: CheckBox = null
 var spectators_toggle: CheckBox = null
+var watch_button: Button = null
 
 func _ready() -> void:
 	_build_room_settings_controls()
+	_build_watch_button()
 
 	create_room_button.disabled = true
 	join_by_code_button.disabled = true
@@ -32,8 +34,40 @@ func _ready() -> void:
 	NetworkManager.disconnected_from_server.connect(_on_disconnected_from_server)
 	NetworkManager.room_created.connect(_on_room_created)
 	NetworkManager.room_joined.connect(_on_room_joined)
+	NetworkManager.room_error.connect(_on_room_error)
 
 	_ensure_connection()
+
+func _build_watch_button() -> void:
+	# "Allow spectators" only ever set a room flag; there was no way to actually
+	# become one. Watching is now its own way in, next to Join.
+	watch_button = Button.new()
+	watch_button.name = "WatchButton"
+	watch_button.text = "Watch Instead"
+	watch_button.tooltip_text = "Join this room without a seat and watch the table."
+	watch_button.custom_minimum_size = Vector2(0, 42)
+	watch_button.disabled = true
+	watch_button.pressed.connect(_on_watch_pressed)
+
+	var parent := join_by_code_button.get_parent()
+	parent.add_child(watch_button)
+	parent.move_child(watch_button, join_by_code_button.get_index() + 1)
+
+func _on_watch_pressed() -> void:
+	var room_code := room_code_input.text.strip_edges().to_upper()
+	if room_code == "":
+		status_label.text = "Enter the room code you want to watch."
+		return
+	NetworkManager.join_room(room_code, true)
+
+func _on_room_error(message: String) -> void:
+	# The server refused the join. Saying so beats a button that looks dead.
+	status_label.text = message
+	status_label.add_theme_color_override("font_color", Color(0.95, 0.42, 0.40))
+	await get_tree().create_timer(6.0).timeout
+	if is_instance_valid(status_label):
+		status_label.remove_theme_color_override("font_color")
+		status_label.text = "Connected"
 
 func _ensure_connection() -> void:
 	retry_button.visible = false
@@ -89,20 +123,23 @@ func _on_back_pressed() -> void:
 func _on_connected_to_server() -> void:
 	status_label.text = "Connected"
 	retry_button.visible = false
-	create_room_button.disabled = false
-	join_by_code_button.disabled = false
+	_set_room_actions_enabled(true)
 
 func _on_connection_failed() -> void:
 	status_label.text = "Could not reach the server."
 	retry_button.visible = true
-	create_room_button.disabled = true
-	join_by_code_button.disabled = true
+	_set_room_actions_enabled(false)
 
 func _on_disconnected_from_server() -> void:
 	status_label.text = "Disconnected from server."
 	retry_button.visible = true
-	create_room_button.disabled = true
-	join_by_code_button.disabled = true
+	_set_room_actions_enabled(false)
+
+func _set_room_actions_enabled(enabled: bool) -> void:
+	create_room_button.disabled = not enabled
+	join_by_code_button.disabled = not enabled
+	if watch_button != null:
+		watch_button.disabled = not enabled
 
 func _add_setting_label(text: String) -> void:
 	var label := Label.new()

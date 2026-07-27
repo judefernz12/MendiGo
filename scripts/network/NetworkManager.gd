@@ -35,10 +35,20 @@ var current_lobby_players: Array = []
 var current_room_settings: Dictionary = {}
 var latest_game_state_snapshot: Dictionary = {}
 
+# True when this client is in the room without a seat: it joined a game that
+# had already started, the table was full, or it asked to watch.
+var is_spectator: bool = false
+
 # Handed from the lobby to the game scene. Kept in memory on purpose: two
 # clients running on one machine share user://, so writing this to a file
 # made the second client load the first client's seat.
 var pending_match_setup: Dictionary = {}
+
+# The last "go to the table" payload the server sent, kept until a scene acts
+# on it. Joining a running room answers immediately, which can beat the lobby
+# scene into existence - the signal would then fire into nothing and the
+# client would sit on the team picker while the game ran without it.
+var pending_game_entry: Dictionary = {}
 
 func _ready() -> void:
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -114,6 +124,9 @@ func disconnect_from_server() -> void:
 	current_room_code = ""
 	current_lobby_players.clear()
 	latest_game_state_snapshot.clear()
+	pending_game_entry.clear()
+	pending_match_setup.clear()
+	is_spectator = false
 
 func create_room(room_settings: Dictionary = {}) -> void:
 	if multiplayer.multiplayer_peer == null:
@@ -227,6 +240,7 @@ func _on_server_disconnected() -> void:
 @rpc("authority")
 func _client_room_created(room_code: String) -> void:
 	current_room_code = room_code
+	is_spectator = false
 	emit_signal("room_created", room_code)
 
 @rpc("authority")
@@ -241,11 +255,12 @@ func _client_identity_conflict() -> void:
 	_save_identity()
 	emit_signal("room_error", "That seat is already taken by another window. Rejoining as a new player.")
 	if current_room_code != "":
-		join_room(current_room_code)
+		join_room(current_room_code, is_spectator)
 
 @rpc("authority")
-func _client_room_joined(room_code: String) -> void:
+func _client_room_joined(room_code: String, as_spectator: bool = false) -> void:
 	current_room_code = room_code
+	is_spectator = as_spectator
 	emit_signal("room_joined", room_code)
 
 @rpc("authority")
@@ -256,7 +271,13 @@ func _client_lobby_updated(players: Array, settings: Dictionary = {}) -> void:
 
 @rpc("authority")
 func _client_start_match(match_setup: Dictionary) -> void:
+	_remember_game_entry("start_match", match_setup)
 	emit_signal("start_match", match_setup)
+
+func _remember_game_entry(kind: String, data: Dictionary) -> void:
+	if bool(data.get("is_spectator", false)):
+		is_spectator = true
+	pending_game_entry = {"kind": kind, "data": data.duplicate(true)}
 
 @rpc("authority")
 func _client_receive_game_state(snapshot: Dictionary) -> void:
@@ -269,10 +290,12 @@ func _client_receive_game_action(action: Dictionary) -> void:
 
 @rpc("authority")
 func _client_dealer_draw_updated(match_data: Dictionary) -> void:
+	_remember_game_entry("dealer_draw", match_data)
 	emit_signal("dealer_draw_updated", match_data)
 
 @rpc("authority")
 func _client_trump_mode_choice_requested(match_data: Dictionary) -> void:
+	_remember_game_entry("trump_mode_choice", match_data)
 	emit_signal("trump_mode_choice_requested", match_data)
 
 # -------- server rpc stubs: MUST exactly match server signatures --------

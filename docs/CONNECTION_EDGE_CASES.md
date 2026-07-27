@@ -24,6 +24,19 @@ after a dropped connection - or after closing and reopening the app - reclaims
 the same seat. It used to generate a new id every launch, which meant coming
 back as a stranger and landing in the spectator list.
 
+**They are also put back on the table.** Rejoining used to reclaim the seat and
+then leave the client sitting on the team picker while the game carried on
+without it: the only thing the server sent was a game snapshot, and the lobby
+scene does not listen for those. The server now works out what a peer arriving
+after the lobby needs (`_room_entry_for`) and sends it - the dealer-draw screen
+if the dealer is still being picked, otherwise the match setup **and** the
+current state - so the client lands where the game actually is.
+
+The answer can arrive before the lobby scene has finished loading, which would
+fire the signal into nothing. `NetworkManager` keeps the last entry in
+`pending_game_entry` and the lobby picks it up on `_ready` if it is already
+waiting, so the timing cannot lose it.
+
 ### Two clients on one machine (tested)
 
 They share `user://`, so they would share that saved id, and the second one
@@ -34,13 +47,39 @@ player. Once the first client really has gone, the id works normally again.
 
 ### Someone joins mid-game (tested)
 
-**Not allowed into a seat.** Seats and hands are fixed when the deal starts, so
-a newcomer becomes a spectator (their view is redacted - no hands, no hidden
-trump). This holds even if a seat is technically free because bots were turned
-off; dealing them in halfway through is not possible.
+**Not allowed into a seat, ever.** Seats and hands are fixed when the deal
+starts, so a newcomer becomes a spectator (their view is redacted - no hands, no
+hidden trump). This holds even if a seat is technically free because bots were
+turned off; dealing them in halfway through is not possible.
 
 If the room has spectators disabled they are refused with a message rather than
-silently ignored.
+silently ignored, and the message now says which it is - the game has started,
+or the room is full.
+
+### Watching (tested)
+
+Spectating used to exist only as a room flag: "Allow spectators" decided whether
+a full or running room would accept a watcher, but nothing in the UI could ask
+to be one, and anybody who did become one was parked in the lobby forever.
+
+- **Getting in:** the online menu has a **Watch Instead** button next to Join.
+  It joins with `as_spectator = true`, so it works on a room that has not
+  started yet as well as one already playing.
+- **Waiting:** a watcher who arrives before the start sits in the lobby with the
+  seat controls hidden and a line saying they are watching. Players see a
+  "(N watching)" count on their hint line.
+- **Getting to the table:** spectators are included in the lobby, dealer-draw
+  and match-start broadcasts, so the game opens for them at the same moment it
+  opens for everybody else.
+- **What they see:** every hand is redacted, *including the seat drawn at the
+  bottom of their own screen*, which belongs to a real player. That seat is
+  capped and face down like any other, is not clickable, and is named rather
+  than called "You". `is_host` and `must_play_trump` are forced off so a
+  watcher can never inherit the rematch button or somebody else's obligation.
+- **The screen:** a WATCHING badge, no action buttons, no trump-mode dialog, no
+  turn ring for a turn they do not have, and the scoreboard names the two sides
+  ("TEAM A" / "TEAM B") instead of "your team" / "opponents". A court still gets
+  its full banner and confetti with the winning side named.
 
 ### The host leaves (tested)
 
@@ -70,6 +109,10 @@ is long enough for a dropped connection to come back to its seat.
   accident mid-hand and cannot be undone from the other players' side.
 - A disconnect mid-turn immediately re-arms the turn logic rather than waiting
   for the next broadcast.
+- Joining a room code that does not exist used to return in silence, which on
+  the client was indistinguishable from a dead button. It now answers with
+  "No room with code XXXXX", and the online menu shows join errors at all -
+  it never listened for them before.
 
 ## Not handled, and why
 
@@ -100,10 +143,15 @@ for 3 minutes even though they chose to go.
 seat opens for a spectator to take. Worth doing once spectator-to-player
 promotion exists; the two features only make sense together.
 
-### No spectator UI
+### A spectator cannot be promoted into a free seat
 
-Spectators receive correctly redacted snapshots and can watch, but there is no
-"you are watching" banner and no way to be promoted into a free seat.
+Watching is now a complete path in and out, but a spectator stays a spectator
+for the life of the room. If a player leaves for good, their seat is played by
+the server rather than offered to whoever is watching.
+
+**Best fix:** pair it with the deliberate-leave item above - a Leave that tells
+the server it means it, and a "take this seat" prompt for spectators between
+games. Mid-game promotion is not possible: there is no hand to hand over.
 
 ### Free-tier hosting sleeps
 

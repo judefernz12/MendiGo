@@ -187,6 +187,11 @@ var court_celebrated: bool = false
 var celebration_layer: Control = null
 
 var is_host: bool = false
+# Watching, not playing: no seat, no hand, nothing to click. Every seat on the
+# table belongs to somebody else, including the one at the bottom.
+var is_spectator: bool = false
+var spectator_badge: PanelContainer = null
+var team_row_labels: Dictionary = {}   # "you" / "them" -> Label
 var next_game_deadline_ms: int = 0
 var countdown_panel: PanelContainer = null
 var countdown_label: Label = null
@@ -217,10 +222,12 @@ func _ready() -> void:
 	dealer_draw_cards = (match_setup.get("dealer_draw_cards", []) as Array).duplicate(true)
 
 	is_host = bool(match_setup.get("is_host", false))
+	is_spectator = bool(match_setup.get("is_spectator", NetworkManager.is_spectator))
 
 	_build_status_ui()
 	_build_countdown_ui()
 	_build_action_bar()
+	_build_spectator_badge()
 	_ensure_nameplates()
 
 	play_button.pressed.connect(_on_play_button_pressed)
@@ -522,8 +529,14 @@ func _opponent_hand_transform(view_name: String, index: int, count: int) -> Dict
 		"rotation": Vector3(0.0, 90.0 - rad_to_deg(theta), (center - float(slot)) * 4.0)
 	}
 
+func _is_open_hand(view_name: String) -> bool:
+	# The only hand ever drawn face up is the local player's own. A spectator
+	# has none, so the bottom seat is treated exactly like the others: a capped
+	# stack of card backs.
+	return view_name == "my" and not is_spectator
+
 func _visual_count(view_name: String, real_count: int) -> int:
-	if view_name == "my":
+	if _is_open_hand(view_name):
 		return real_count
 	return mini(real_count, _max_opponent_cards())
 
@@ -761,8 +774,13 @@ func _sync_meta(target: Dictionary) -> void:
 	trump_holder_view = str(target.get("hidden_trump_holder_seat", trump_holder_view))
 	dealer_view = str(target.get("dealer_seat", dealer_view))
 
+	# The server is the authority on whether this client holds a seat, so a
+	# snapshot can promote a client to watching but never the other way round.
+	if bool(target.get("is_spectator", false)):
+		is_spectator = true
+
 	var turn_index := int(target.get("current_turn_index", -1))
-	my_turn = (turn_index == 0)
+	my_turn = (turn_index == 0) and not is_spectator
 	table_busy = bool(target.get("trick_is_resolving", false)) or bool(target.get("revealing_trump", false)) or phase == "dealing"
 
 func _is_new_game(previous: Dictionary, target: Dictionary) -> bool:
@@ -812,7 +830,7 @@ func _sync_opponent_stacks(target: Dictionary) -> void:
 	# back is identical, so this is invisible.
 	var hands: Dictionary = target.get("hands", {})
 	for view_name in seat_order:
-		if view_name == "my":
+		if _is_open_hand(view_name):
 			continue
 		var real: int = (hands.get(view_name, []) as Array).size()
 		var want := _visual_count(view_name, real)
@@ -854,7 +872,7 @@ func _animate_deal(target: Dictionary) -> void:
 		var target_hand: Array = hands.get(view_name, [])
 		var cards: Array = _hand(view_name)
 
-		if view_name == "my":
+		if _is_open_hand(view_name):
 			# Keep the player's current order (sorting must survive) and
 			# append only genuinely new cards.
 			var present := {}
@@ -928,6 +946,10 @@ func _reveal_my_hand(target: Dictionary) -> void:
 	# The server sends placeholder faces during the trump setup, so refresh
 	# the card data first, then turn over anything still face down.
 	if _in_trump_setup():
+		return
+	# A spectator's bottom seat is somebody else's hand, and the server sends it
+	# redacted. Turning it over would show four placeholder 2s.
+	if is_spectator:
 		return
 
 	var by_id := {}
@@ -1247,9 +1269,9 @@ func _snap_rebuild(target: Dictionary) -> void:
 		var draw_count := _visual_count(view_name, source.size())
 		for i in range(draw_count):
 			var card_state: Dictionary = source[i]
-			var face_up: bool = (view_name == "my") and not _in_trump_setup()
+			var face_up: bool = _is_open_hand(view_name) and not _in_trump_setup()
 			var card := _new_card(card_state, face_up, Vector3.ZERO)
-			if view_name == "my":
+			if _is_open_hand(view_name):
 				card.clickable = true
 				card.card_clicked.connect(_on_card_clicked)
 			cards.append(card)
@@ -1289,7 +1311,7 @@ func _snap_rebuild(target: Dictionary) -> void:
 # =========================================================================
 
 func _can_interact() -> bool:
-	return not table_busy and not is_rendering
+	return not table_busy and not is_rendering and not is_spectator
 
 func _on_card_clicked(card: Node3D) -> void:
 	if not _can_interact():
@@ -1413,7 +1435,7 @@ func _build_dealer_draw_cards() -> void:
 			"suit": str(card_state.get("suit", "")),
 			"rank": str(card_state.get("rank", ""))
 		}, false, pos)
-		card.clickable = not bool(card_state.get("is_claimed", false))
+		card.clickable = not bool(card_state.get("is_claimed", false)) and not is_spectator
 		if card.clickable:
 			card.card_clicked.connect(func(_c): _on_dealer_draw_clicked(draw_index))
 		dealer_draw_nodes[draw_index] = card
@@ -1423,10 +1445,10 @@ func _build_dealer_draw_cards() -> void:
 		if bool(card_state.get("is_claimed", false)):
 			_place_claimed_draw_card(card_state, false)
 
-	_set_phase_message("Pick a card to decide the dealer")
+	_set_phase_message("Picking a dealer..." if is_spectator else "Pick a card to decide the dealer")
 
 func _on_dealer_draw_clicked(draw_index: int) -> void:
-	if phase != "dealer_draw" or dealer_draw_selected != -1:
+	if phase != "dealer_draw" or dealer_draw_selected != -1 or is_spectator:
 		return
 	dealer_draw_selected = draw_index
 	NetworkManager.claim_dealer_draw_card(draw_index)
@@ -1657,6 +1679,7 @@ func _build_status_ui() -> void:
 
 	var you_name := _hud_label("YOUR TEAM", 14, COL_YOU)
 	you_name.custom_minimum_size = Vector2(96, 0)
+	team_row_labels["you"] = you_name
 	grid.add_child(you_name)
 	grid.add_child(_score_cell("you_score", "0", 22, COL_TEXT))
 	grid.add_child(_score_cell("you_tens", "0 / 4", 16, COL_GOLD))
@@ -1664,6 +1687,7 @@ func _build_status_ui() -> void:
 
 	var them_name := _hud_label("OPPONENTS", 14, COL_THEM)
 	them_name.custom_minimum_size = Vector2(96, 0)
+	team_row_labels["them"] = them_name
 	grid.add_child(them_name)
 	grid.add_child(_score_cell("them_score", "0", 22, COL_TEXT))
 	grid.add_child(_score_cell("them_tens", "0 / 4", 16, COL_GOLD))
@@ -1846,7 +1870,8 @@ func _style_nameplate(view_name: String, plate: Label, is_turn: bool) -> void:
 		plate.add_theme_color_override("font_color", Color(0.93, 0.96, 0.98))
 
 func _display_name(view_name: String) -> String:
-	if view_name == "my":
+	# The bottom seat is only "You" to the player sitting in it.
+	if view_name == "my" and not is_spectator:
 		return "You"
 	if view_name == "":
 		return "-"
@@ -1886,6 +1911,16 @@ func _refresh_hud() -> void:
 	_refresh_turn_timer()
 
 func _refresh_buttons() -> void:
+	if is_spectator:
+		# Nothing here belongs to a watcher, including the trump-mode dialog,
+		# which is the seat holder's decision to make.
+		_hide_trump_mode_choice()
+		play_button.visible = false
+		confirm_hidden_trump_button.visible = false
+		open_trump_button.visible = false
+		arrange_button.visible = false
+		return
+
 	var choosing_mode := phase == "trump_mode_choice"
 	var choosing_card := phase == "closed_trump_card_choice" and _is_local_trump_holder()
 	var playing := phase == "playing" and my_turn and _can_interact()
@@ -1949,9 +1984,18 @@ func _refresh_scoreboard() -> void:
 	_set_hud_value("you_tens", "%d / %d" % [my_tens, TENS_IN_DECK], COL_GOLD if my_tens >= TENS_IN_DECK - 1 else COL_TEXT)
 	_set_hud_value("them_tens", "%d / %d" % [their_tens, TENS_IN_DECK], COL_GOLD if their_tens >= TENS_IN_DECK - 1 else COL_TEXT)
 
+	# "Your team" and "Opponents" mean nothing to somebody without a seat, so a
+	# watcher gets the sides named instead.
+	var you_label: Label = team_row_labels.get("you", null)
+	var them_label: Label = team_row_labels.get("them", null)
+	if you_label != null and is_instance_valid(you_label):
+		you_label.text = ("TEAM %s" % my_team) if is_spectator else "YOUR TEAM"
+	if them_label != null and is_instance_valid(them_label):
+		them_label.text = ("TEAM %s" % other_team) if is_spectator else "OPPONENTS"
+
 	var turn_view := _current_turn_view()
 	_set_hud_value("dealer", _display_name(dealer_view), COL_TEXT)
-	_set_hud_value("turn", _display_name(turn_view), COL_GOLD if turn_view == "my" else COL_TEXT)
+	_set_hud_value("turn", _display_name(turn_view), COL_GOLD if turn_view == "my" and not is_spectator else COL_TEXT)
 
 func _refresh_trump_label() -> void:
 	if trump_active and trump_suit != "":
@@ -2156,7 +2200,13 @@ func _show_match_over(target: Dictionary) -> void:
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(box)
 
-	var headline := _hud_label("YOU WIN THE MATCH" if won else "MATCH LOST", 54, COL_GOLD if won else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
+	var headline_text := "YOU WIN THE MATCH" if won else "MATCH LOST"
+	var caption_text := "your team  ·  opponents      (first to %d)" % int(target.get("target_score", 15))
+	if is_spectator:
+		headline_text = "TEAM %s WINS THE MATCH" % str(result.get("winner", my_team))
+		caption_text = "team %s  ·  team %s      (first to %d)" % [my_team, other_team, int(target.get("target_score", 15))]
+
+	var headline := _hud_label(headline_text, 54, COL_GOLD if won or is_spectator else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
 	headline.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
 	headline.add_theme_constant_override("outline_size", 10)
 	box.add_child(headline)
@@ -2166,7 +2216,7 @@ func _show_match_over(target: Dictionary) -> void:
 	score_line.add_theme_constant_override("outline_size", 8)
 	box.add_child(score_line)
 
-	var caption := _hud_label("your team  ·  opponents      (first to %d)" % int(target.get("target_score", 15)), 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var caption := _hud_label(caption_text, 15, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(caption)
 
 	var spacer := Control.new()
@@ -2198,7 +2248,8 @@ func _show_match_over(target: Dictionary) -> void:
 	quit_button.pressed.connect(_on_leave_pressed)
 	buttons.add_child(quit_button)
 
-	if won:
+	# A watcher has no side, so "you won" confetti would be meaningless.
+	if won and not is_spectator:
 		_spawn_confetti(layer, 60)
 
 	var fade := layer.create_tween()
@@ -2256,18 +2307,24 @@ func _celebrate_court(result: Dictionary) -> void:
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(box)
 
-	var headline := _hud_label("COURT!" if won else "COURT AGAINST YOU", 76 if won else 52, COL_GOLD if won else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
+	# A court is a spectacle whoever takes it, so a watcher gets the full banner
+	# with the winning side named rather than "you" or "the opponents".
+	var celebrate := won or is_spectator
+	var headline_text := "COURT!" if celebrate else "COURT AGAINST YOU"
+	var headline := _hud_label(headline_text, 76 if celebrate else 52, COL_GOLD if celebrate else COL_THEM, HORIZONTAL_ALIGNMENT_CENTER)
 	headline.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
 	headline.add_theme_constant_override("outline_size", 12)
 	box.add_child(headline)
 
 	var who := "You swept all four 10s" if won else "The opponents swept all four 10s"
+	if is_spectator:
+		who = "Team %s swept all four 10s" % str(result.get("winner", ""))
 	var subtitle := _hud_label(who, 22, COL_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	subtitle.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
 	subtitle.add_theme_constant_override("outline_size", 6)
 	box.add_child(subtitle)
 
-	var points := _hud_label("+%d POINTS" % int(result.get("points", 5)), 28, COL_GOLD if won else COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var points := _hud_label("+%d POINTS" % int(result.get("points", 5)), 28, COL_GOLD if celebrate else COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	points.add_theme_color_override("font_outline_color", Color(0, 0, 0, 1))
 	points.add_theme_constant_override("outline_size", 8)
 	box.add_child(points)
@@ -2275,7 +2332,7 @@ func _celebrate_court(result: Dictionary) -> void:
 	if bool(result.get("ended_early", false)):
 		box.add_child(_hud_label("Game ended early — the court is decided", 16, COL_MUTED, HORIZONTAL_ALIGNMENT_CENTER))
 
-	if won:
+	if celebrate:
 		_spawn_confetti(layer, 46)
 
 	# The banner has no size until the container has laid it out, so the pop
@@ -2342,6 +2399,10 @@ func _clear_phase_message() -> void:
 	phase_message_label.text = ""
 
 func _refresh_phase_message() -> void:
+	if is_spectator:
+		_refresh_spectator_message()
+		return
+
 	match phase:
 		"dealer_draw":
 			if dealer_draw_selected == -1:
@@ -2393,6 +2454,77 @@ func _refresh_phase_message() -> void:
 		_:
 			_clear_phase_message()
 
+func _refresh_spectator_message() -> void:
+	# Everything a player is told is phrased around their own hand and turn,
+	# none of which a watcher has. Report the table instead.
+	match phase:
+		"dealer_draw":
+			_set_phase_message("Picking a dealer - the highest card deals")
+		"dealer_decided":
+			_set_phase_message("%s deals this game" % _display_name(dealer_view))
+		"dealing":
+			_set_phase_message("Dealing...")
+		"trump_mode_choice":
+			_set_phase_message("%s is choosing open or closed trump" % _display_name(_trump_holder_view()))
+		"closed_trump_card_choice":
+			_set_phase_message("%s is hiding a trump card" % _display_name(_trump_holder_view()))
+		"game_result", "match_result":
+			_set_phase_message(_spectator_result_text())
+		"playing":
+			if bool(state.get("revealing_trump", false)):
+				_set_phase_message("Trump revealed: %s" % trump_suit.capitalize())
+			else:
+				_clear_phase_message()
+		_:
+			_clear_phase_message()
+
+func _spectator_result_text() -> String:
+	var result: Dictionary = state.get("last_game_result", {})
+	if result.is_empty():
+		return "Game complete"
+	if bool(result.get("draw", false)):
+		return "Draw! No points."
+	var winner := str(result.get("winner", ""))
+	var points := int(result.get("points", 0))
+	if bool(result.get("court", false)):
+		return "COURT! Team %s took all four 10s (+%d)." % [winner, points]
+	if phase == "match_result":
+		return "Team %s won the match! (+%d)" % [winner, points]
+	return "Team %s won this game (+%d)." % [winner, points]
+
+func _build_spectator_badge() -> void:
+	# A watcher has no cards and no buttons, so without this the screen is not
+	# obviously different from a game you are simply not on turn in.
+	if not is_spectator:
+		return
+
+	spectator_badge = PanelContainer.new()
+	spectator_badge.name = "SpectatorBadge"
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.05, 0.08, 0.14, 0.9)
+	style.border_color = Color(0.36, 0.66, 0.98, 0.85)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(12)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
+	spectator_badge.add_theme_stylebox_override("panel", style)
+	spectator_badge.anchor_left = 0.5
+	spectator_badge.anchor_right = 0.5
+	spectator_badge.anchor_top = 1.0
+	spectator_badge.anchor_bottom = 1.0
+	spectator_badge.offset_left = -110.0
+	spectator_badge.offset_right = 110.0
+	spectator_badge.offset_top = -70.0
+	spectator_badge.offset_bottom = -28.0
+	spectator_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(spectator_badge)
+
+	var label := _hud_label("WATCHING", 16, Color(0.66, 0.83, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	spectator_badge.add_child(label)
+
 # =========================================================================
 # turn timer
 # =========================================================================
@@ -2433,7 +2565,9 @@ func _refresh_turn_timer() -> void:
 		"playing":
 			view = _current_turn_view()
 		"dealer_draw":
-			if dealer_draw_selected == -1:
+			# The ring counts down this client's own pick, so a watcher has
+			# nothing for it to count.
+			if dealer_draw_selected == -1 and not is_spectator:
 				view = "my"
 				limit = choice_time_limit
 		"closed_trump_card_choice":

@@ -43,6 +43,13 @@ func _ready() -> void:
 	settings = NetworkManager.current_room_settings.duplicate(true)
 	_refresh_players()
 
+	# Joining a room that is already playing gets an answer immediately, which
+	# can arrive before this scene exists - the signal would fire into nothing
+	# and leave the player staring at the team picker. Pick up anything that
+	# landed early instead of waiting for a signal that has already gone.
+	if not NetworkManager.pending_game_entry.is_empty():
+		_enter_game(NetworkManager.pending_game_entry)
+
 func _on_copy_code_pressed() -> void:
 	DisplayServer.clipboard_set(NetworkManager.current_room_code)
 	copy_code_button.text = "Copied!"
@@ -125,14 +132,39 @@ func _refresh_players() -> void:
 	team_a_header.text = "TEAM A   %d/%d" % [_members_of("A").size(), capacity]
 	team_b_header.text = "TEAM B   %d/%d" % [_members_of("B").size(), capacity]
 
+	# A watcher has no seat, so the seat controls would do nothing at all if
+	# they were pressed. Hide them and say plainly what is going on instead.
+	var watching := NetworkManager.is_spectator
+	join_team_a_button.visible = not watching
+	join_team_b_button.visible = not watching
+	ready_button.visible = not watching
+	start_game_button.visible = _is_local_host() and not watching
+
+	if watching:
+		hint_label.visible = true
+		hint_label.text = "You are watching this room. The table opens as soon as the host starts."
+		return
+
 	var my_team := _local_team()
 	join_team_a_button.text = "You're in A" if my_team == "A" else "Join A"
 	join_team_b_button.text = "You're in B" if my_team == "B" else "Join B"
 	join_team_a_button.disabled = my_team == "A" or _members_of("A").size() >= capacity
 	join_team_b_button.disabled = my_team == "B" or _members_of("B").size() >= capacity
 
-	start_game_button.visible = _is_local_host()
-	hint_label.visible = not _is_local_host() or players.size() < 2
+	hint_label.visible = not _is_local_host() or players.size() < 2 or _watcher_count() > 0
+	hint_label.text = _default_hint()
+
+func _watcher_count() -> int:
+	return int(settings.get("spectator_count", 0))
+
+func _default_hint() -> String:
+	var base := "Pick a side before the host starts. Empty seats are filled with bots."
+	var watchers := _watcher_count()
+	if watchers == 1:
+		return base + "  (1 watching)"
+	if watchers > 1:
+		return base + "  (%d watching)" % watchers
+	return base
 
 func _on_join_team_pressed(team: String) -> void:
 	NetworkManager.send_team_choice(team)
@@ -146,7 +178,7 @@ func _on_room_error(message: String) -> void:
 	await get_tree().create_timer(6.0).timeout
 	if is_instance_valid(hint_label):
 		hint_label.remove_theme_color_override("font_color")
-		hint_label.text = "Pick a side before the host starts. Empty seats are filled with bots."
+		hint_label.text = _default_hint()
 		_refresh_players()
 
 func _is_local_host() -> bool:
@@ -194,38 +226,36 @@ func _save_match_setup(setup: Dictionary) -> void:
 	# the same machine, which would give both players the same seat.
 	NetworkManager.pending_match_setup = setup.duplicate(true)
 
-func _on_start_match(match_setup: Dictionary) -> void:
-	var host_peer_id: int = int(match_setup.get("host_peer_id", -1))
-	match_setup["players"] = _mark_local_players(match_setup.get("players", []))
-	match_setup["is_host"] = (multiplayer.get_unique_id() == host_peer_id)
+func _enter_game(entry: Dictionary) -> void:
+	# One door into the table, whether the host just started, the dealer draw
+	# opened, or this client rejoined a game already in progress.
+	NetworkManager.pending_game_entry = {}
+	var data: Dictionary = entry.get("data", {})
+	var kind := str(entry.get("kind", ""))
+	var watching := bool(data.get("is_spectator", NetworkManager.is_spectator))
 
-	_save_match_setup(match_setup)
+	var setup := {
+		"players": _mark_local_players(data.get("players", [])),
+		"phase": data.get("phase", "dealer_draw"),
+		"dealer_draw_cards": data.get("dealer_draw_cards", []),
+		"dealer_seat_id": data.get("dealer_seat_id", ""),
+		"trump_holder_seat_id": data.get("trump_holder_seat_id", ""),
+		"trump_mode": data.get("trump_mode", ""),
+		"is_spectator": watching,
+		"is_host": false
+	}
+	if kind == "start_match":
+		setup["phase"] = data.get("phase", "server_match")
+		setup["is_host"] = not watching and multiplayer.get_unique_id() == int(data.get("host_peer_id", -1))
+
+	_save_match_setup(setup)
 	get_tree().change_scene_to_file("res://scenes/game/GameRoom3D.tscn")
+
+func _on_start_match(match_setup: Dictionary) -> void:
+	_enter_game({"kind": "start_match", "data": match_setup})
 
 func _on_dealer_draw_updated(match_data: Dictionary) -> void:
-	var setup := {
-		"players": _mark_local_players(match_data.get("players", [])),
-		"phase": match_data.get("phase", "dealer_draw"),
-		"dealer_draw_cards": match_data.get("dealer_draw_cards", []),
-		"dealer_seat_id": match_data.get("dealer_seat_id", ""),
-		"trump_holder_seat_id": match_data.get("trump_holder_seat_id", ""),
-		"trump_mode": match_data.get("trump_mode", ""),
-		"is_host": false
-	}
-
-	_save_match_setup(setup)
-	get_tree().change_scene_to_file("res://scenes/game/GameRoom3D.tscn")
+	_enter_game({"kind": "dealer_draw", "data": match_data})
 
 func _on_trump_mode_choice_requested(match_data: Dictionary) -> void:
-	var setup := {
-		"players": _mark_local_players(match_data.get("players", [])),
-		"phase": match_data.get("phase", "trump_mode_choice"),
-		"dealer_draw_cards": match_data.get("dealer_draw_cards", []),
-		"dealer_seat_id": match_data.get("dealer_seat_id", ""),
-		"trump_holder_seat_id": match_data.get("trump_holder_seat_id", ""),
-		"trump_mode": match_data.get("trump_mode", ""),
-		"is_host": false
-	}
-
-	_save_match_setup(setup)
-	get_tree().change_scene_to_file("res://scenes/game/GameRoom3D.tscn")
+	_enter_game({"kind": "trump_mode_choice", "data": match_data})

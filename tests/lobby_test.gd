@@ -100,7 +100,113 @@ func _run() -> void:
 	await push_lobby()
 	ok(not lobby.start_game_button.visible, "a non-host does not see the start button")
 
+	spectator_lobby_check()
+	await process_frame
+	entry_check()
+	online_menu_check()
+
 	_report()
+
+# --- the way in ------------------------------------------------------------
+
+func online_menu_check() -> void:
+	# "Allow spectators" was a room flag with no way to take it up. Watching
+	# needs its own door.
+	net.use_local_server = true   # never dial the real server from a test
+	var menu: Control = load("res://scenes/ui/OnlineMenu.tscn").instantiate()
+	root.add_child(menu)
+
+	ok(menu.watch_button != null, "the online menu offers a way to watch")
+	if menu.watch_button == null:
+		menu.queue_free()
+		return
+	ok(menu.watch_button.get_parent() == menu.join_by_code_button.get_parent(), "the watch button sits with the join controls")
+	ok(menu.watch_button.get_index() == menu.join_by_code_button.get_index() + 1, "directly under Join")
+
+	menu._on_connected_to_server()
+	ok(not menu.watch_button.disabled, "watching is offered once connected")
+
+	menu.room_code_input.text = ""
+	menu._on_watch_pressed()
+	ok(str(menu.status_label.text).to_lower().contains("code"), "watching without a room code asks for one")
+
+	menu._on_disconnected_from_server()
+	ok(menu.watch_button.disabled, "and is not offered with no connection")
+
+	menu.queue_free()
+	net.disconnect_from_server()   # drop the dial-out this test started
+
+# --- watching from the lobby ------------------------------------------------
+
+func spectator_lobby_check() -> void:
+	# A watcher has no seat, so seat controls would silently do nothing. They
+	# must not be offered at all.
+	net.is_spectator = true
+	lobby._refresh_players()
+
+	ok(not lobby.join_team_a_button.visible and not lobby.join_team_b_button.visible, "a watcher is not offered the team buttons")
+	ok(not lobby.ready_button.visible, "nor the ready button")
+	ok(not lobby.start_game_button.visible, "nor the start button")
+	ok(lobby.hint_label.visible and str(lobby.hint_label.text).to_lower().contains("watching"), "the lobby says plainly that they are watching")
+
+	net.is_spectator = false
+	lobby._refresh_players()
+	ok(lobby.join_team_a_button.visible and lobby.ready_button.visible, "a seated player gets the controls back")
+
+	# The room tells everyone how many people are watching.
+	var settings: Dictionary = (server.rooms[code].get("settings", {}) as Dictionary).duplicate(true)
+	settings["spectator_count"] = 2
+	lobby._on_lobby_updated(server.rooms[code].get("players", []), settings)
+	ok(str(lobby.hint_label.text).contains("2 watching"), "the lobby counts the watchers for the players")
+
+# --- the entry that used to be dropped on the floor -------------------------
+
+func entry_check() -> void:
+	# Joining a running room is answered immediately, which can beat this scene
+	# into existence. The lobby has to pick up an entry that already arrived
+	# instead of waiting for a signal that has already fired.
+	var players: Array = server.rooms[code].get("players", [])
+	net.pending_game_entry = {
+		"kind": "start_match",
+		"data": {
+			"players": players,
+			"host_peer_id": 2,
+			"phase": "server_match",
+			"dealer_seat_id": "seat_0",
+			"trump_holder_seat_id": "seat_1",
+			"is_spectator": false
+		}
+	}
+
+	var probe: Control = load("res://scenes/ui/Lobby.tscn").instantiate()
+	root.add_child(probe)
+	ok(net.pending_game_entry.is_empty(), "a lobby that opens onto a running game consumes the waiting entry")
+
+	var setup: Dictionary = net.pending_match_setup
+	ok(str(setup.get("phase", "")) == "server_match", "and hands the game scene the match it joined")
+	ok((setup.get("players", []) as Array).size() == players.size(), "with the whole table")
+	ok(str(setup.get("trump_holder_seat_id", "")) == "seat_1", "and who holds the trump")
+	var marked := false
+	for p_raw in setup.get("players", []):
+		var p: Dictionary = p_raw
+		if str(p.get("id", "")) == net.local_player_id:
+			marked = bool(p.get("is_local", false))
+	ok(marked, "the local player is marked in the handoff")
+	probe.queue_free()
+
+	# A watcher's handoff must never claim a seat or the host role.
+	net.is_spectator = true
+	net.pending_match_setup = {}
+	net.pending_game_entry = {
+		"kind": "start_match",
+		"data": {"players": players, "host_peer_id": 2, "phase": "server_match", "is_spectator": true}
+	}
+	var watcher: Control = load("res://scenes/ui/Lobby.tscn").instantiate()
+	root.add_child(watcher)
+	ok(bool(net.pending_match_setup.get("is_spectator", false)), "a watcher is handed off as a watcher")
+	ok(not bool(net.pending_match_setup.get("is_host", true)), "and never as the host, even on the host's own connection")
+	watcher.queue_free()
+	net.is_spectator = false
 
 func _report() -> void:
 	print("")
