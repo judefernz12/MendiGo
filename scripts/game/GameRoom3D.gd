@@ -170,6 +170,8 @@ var my_turn: bool = false
 var table_busy: bool = true          # resolving / revealing / animating
 
 var selected_card: Node3D = null
+# Whether the hand is being kept in order. Pressing Arrange turns it on for the
+# rest of the match; the setting turns it on from the first deal.
 var my_hand_sorted: bool = false
 
 var timer_active: bool = false
@@ -233,6 +235,8 @@ func _ready() -> void:
 
 	is_host = bool(match_setup.get("is_host", false))
 	is_spectator = bool(match_setup.get("is_spectator", NetworkManager.is_spectator))
+	# Same flag Arrange sets, just set before the first card lands.
+	my_hand_sorted = GameSettings.auto_sort_hand
 
 	_build_status_ui()
 	_build_countdown_ui()
@@ -1758,6 +1762,19 @@ func _build_status_ui() -> void:
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	score_panel.add_child(column)
 
+	# The room code is what somebody has to be told before they can join or
+	# watch. It used to live only in the lobby, so once the deal started there
+	# was no way to read it back without leaving the game to go and look.
+	var room_row := HBoxContainer.new()
+	room_row.name = "RoomCodeRow"
+	room_row.add_theme_constant_override("separation", 8)
+	room_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(room_row)
+	room_row.add_child(_hud_label("ROOM", 11, COL_MUTED))
+	var room_value := _hud_label("-----", 15, COL_GOLD)
+	hud_values["room_code"] = room_value
+	room_row.add_child(room_value)
+
 	var target_label := _hud_label("RACE TO 15", 12, COL_MUTED)
 	hud_values["target"] = target_label
 	column.add_child(target_label)
@@ -2072,6 +2089,15 @@ func _set_hud_value(key: String, text: String, color: Color = COL_TEXT) -> void:
 	label.text = text
 	label.add_theme_color_override("font_color", color)
 
+func _room_code_text() -> String:
+	# The drawn snapshot first, so the code on screen always belongs to the
+	# table on screen. The connection is the fallback for the moments before a
+	# snapshot has arrived - the dealer draw and the trump choice.
+	var code := str(state.get("room_code", "")).strip_edges()
+	if code == "":
+		code = str(NetworkManager.current_room_code).strip_edges()
+	return code.to_upper() if code != "" else "-----"
+
 func _refresh_scoreboard() -> void:
 	if hud_values.is_empty():
 		return
@@ -2084,6 +2110,7 @@ func _refresh_scoreboard() -> void:
 	var my_tens := int(tens.get(my_team, 0))
 	var their_tens := int(tens.get(other_team, 0))
 
+	_set_hud_value("room_code", _room_code_text(), COL_GOLD)
 	_set_hud_value("target", "RACE TO %d" % int(state.get("target_score", 15)), COL_MUTED)
 	_set_hud_value("you_score", str(scores.get(my_team, 0)), COL_TEXT)
 	_set_hud_value("them_score", str(scores.get(other_team, 0)), COL_TEXT)

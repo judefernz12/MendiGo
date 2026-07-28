@@ -315,6 +315,7 @@ func _run() -> void:
 	ok(str(room_ui.hud_values["target"].text) == "RACE TO %d" % int(drawn.get("target_score", 15)), "the scoreboard shows the target score")
 	ok(str(room_ui.hud_values["dealer"].text) == room_ui._display_name(room_ui.dealer_view), "the scoreboard names the dealer")
 
+	await room_code_check()
 	await lead_suit_chip_check()
 	await touch_input_check()
 
@@ -432,6 +433,55 @@ func touch_input_check() -> void:
 
 	card.queue_free()
 	await process_frame
+
+# --- the code you need to invite anybody -----------------------------------
+
+func room_code_check() -> void:
+	# The room code was only ever on the lobby screen, so once the deal started
+	# there was no way to read it back short of leaving the game to go and look
+	# - which is exactly when you want it, because that is when someone asks to
+	# join or to watch.
+	var net := root.get_node_or_null("NetworkManager")
+	var before := str(net.current_room_code)
+	var before_state_code := str(room_ui.state.get("room_code", ""))
+
+	ok(room_ui.hud_values.has("room_code"), "the table has a room code on it")
+	if not room_ui.hud_values.has("room_code"):
+		return
+	var chip: Label = room_ui.hud_values["room_code"]
+
+	# The snapshot is what it reads, so the code on screen always belongs to
+	# the table on screen rather than to whatever the client last joined.
+	room_ui.state["room_code"] = "qx4kz"
+	net.current_room_code = ""
+	room_ui._refresh_scoreboard()
+	ok(str(chip.text) == "QX4KZ", "it shows the code of the room being played, in the case people read it out")
+
+	# Before the first snapshot - the dealer draw and the trump choice - there
+	# is no state to read, and the code is exactly as useful then.
+	room_ui.state["room_code"] = ""
+	net.current_room_code = "zz9pk"
+	room_ui._refresh_scoreboard()
+	ok(str(chip.text) == "ZZ9PK", "and falls back to the joined room before the first snapshot lands")
+
+	# Top left, with the scoreboard, rather than loose on the table.
+	var inside_score_panel := false
+	var walk: Node = chip
+	while walk != null:
+		if walk == room_ui.score_panel:
+			inside_score_panel = true
+			break
+		walk = walk.get_parent()
+	ok(inside_score_panel, "and sits in the top-left panel with the rest of the status")
+
+	net.current_room_code = ""
+	room_ui.state["room_code"] = ""
+	room_ui._refresh_scoreboard()
+	ok(str(chip.text) == "-----", "with no room at all it shows a blank rather than a stale code")
+
+	net.current_room_code = before
+	room_ui.state["room_code"] = before_state_code
+	room_ui._refresh_scoreboard()
 
 # --- the suit that is being followed ---------------------------------------
 

@@ -46,6 +46,7 @@ layout_mode = 2
 theme_override_constants/separation = 10
 
 [node name="Title" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"TitleLabel"
 theme_override_font_sizes/font_size = 30
@@ -58,6 +59,7 @@ layout_mode = 2
 theme_type_variation = &"SubtitleLabel"
 text = "Connecting..."
 horizontal_alignment = 1
+autowrap_mode = 3
 
 [node name="RetryButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
 unique_name_in_owner = true
@@ -67,58 +69,97 @@ layout_mode = 2
 text = "Retry Connection"
 
 [node name="Spacer1" type="Control" parent="CenterContainer/Card/Margin/VBox"]
-custom_minimum_size = Vector2(0, 4)
+custom_minimum_size = Vector2(0, 6)
 layout_mode = 2
 
-[node name="SettingsHeader" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+[node name="ChooserPage" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
-theme_type_variation = &"SubtitleLabel"
-text = "NEW ROOM"
+theme_override_constants/separation = 10
 
-[node name="SettingsGrid" type="GridContainer" parent="CenterContainer/Card/Margin/VBox"]
+[node name="GoCreateButton" type="Button" parent="CenterContainer/Card/Margin/VBox/ChooserPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_type_variation = &"AccentButton"
+text = "Create Room"
+tooltip_text = "Set up a new table and invite people with the room code."
+
+[node name="GoJoinButton" type="Button" parent="CenterContainer/Card/Margin/VBox/ChooserPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+text = "Join Room"
+tooltip_text = "Take a seat in somebody else's room using their code."
+
+[node name="GoWatchButton" type="Button" parent="CenterContainer/Card/Margin/VBox/ChooserPage"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+text = "Watch a Game"
+tooltip_text = "Follow a table without taking a seat. Works on a game already in progress."
+
+[node name="CreatePage" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SettingsGrid" type="GridContainer" parent="CenterContainer/Card/Margin/VBox/CreatePage"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/h_separation = 12
 theme_override_constants/v_separation = 8
 columns = 2
 
-[node name="SettingsBox" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+[node name="SettingsBox" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox/CreatePage"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="CreateRoomButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+[node name="CreateRoomButton" type="Button" parent="CenterContainer/Card/Margin/VBox/CreatePage"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 48)
+custom_minimum_size = Vector2(0, 52)
 layout_mode = 2
 theme_type_variation = &"AccentButton"
 text = "Create Room"
 
-[node name="Spacer2" type="Control" parent="CenterContainer/Card/Margin/VBox"]
-custom_minimum_size = Vector2(0, 4)
+[node name="JoinPage" type="VBoxContainer" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+visible = false
 layout_mode = 2
+theme_override_constants/separation = 10
 
-[node name="JoinHeader" type="Label" parent="CenterContainer/Card/Margin/VBox"]
+[node name="JoinHint" type="Label" parent="CenterContainer/Card/Margin/VBox/JoinPage"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"SubtitleLabel"
-text = "JOIN A ROOM"
+text = "Enter the 5-letter code from whoever made the room."
+horizontal_alignment = 1
+autowrap_mode = 3
 
-[node name="RoomCodeInput" type="LineEdit" parent="CenterContainer/Card/Margin/VBox"]
+[node name="RoomCodeInput" type="LineEdit" parent="CenterContainer/Card/Margin/VBox/JoinPage"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 46)
+custom_minimum_size = Vector2(0, 52)
 layout_mode = 2
+theme_override_font_sizes/font_size = 24
 placeholder_text = "Room code"
 alignment = 1
 max_length = 5
 
-[node name="JoinByCodeButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+[node name="JoinByCodeButton" type="Button" parent="CenterContainer/Card/Margin/VBox/JoinPage"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 46)
+custom_minimum_size = Vector2(0, 52)
 layout_mode = 2
+theme_type_variation = &"AccentButton"
 text = "Join"
+
+[node name="Spacer2" type="Control" parent="CenterContainer/Card/Margin/VBox"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
 
 [node name="BackButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 42)
+custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 text = "Back"

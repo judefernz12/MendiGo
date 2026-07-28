@@ -82,6 +82,12 @@ custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
 text = "How To Play"
 
+[node name="SettingsButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 46)
+layout_mode = 2
+text = "Settings"
+
 [node name="ExitButton" type="Button" parent="CenterContainer/Card/Margin/VBox"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 46)

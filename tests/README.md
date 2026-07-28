@@ -15,6 +15,7 @@ Run from the project root (use the same Godot version as the project):
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/trump_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/resilience_test.gd
 & "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/orientation_test.gd
+& "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" --headless --path . -s tests/settings_test.gd
 ```
 
 `rules_test.gd` prints `ALL_RULES_OK` and exits 0 when every rule in
@@ -57,6 +58,12 @@ correctly. It feeds real server snapshots into the real game scene and checks:
 - captured 10s are displayed on the piles
 - the scoreboard cells (score / 10s / tricks / dealer / turn / target) read
   back exactly what the drawn snapshot says
+- the room code is on the table, in the top-left panel with the rest of the
+  status. It used to be on the lobby screen only, so once the deal started
+  there was no way to read it back without leaving the game to go and look -
+  which is exactly when somebody asks to join or to watch. It is read from the
+  drawn snapshot so the code on screen always belongs to the table on screen,
+  falling back to the joined room for the moments before the first snapshot
 - a court raises the celebration overlay with its banner and confetti, the
   result chip and banner message both say COURT, resending the same result
   does not stack a second overlay, and a new game re-arms it
@@ -94,6 +101,19 @@ server output and checks the team picker: each side lists the right players,
 empty seats read as bots, the headers show how full each side is, the join
 buttons reflect where the local player actually sits, and only the host sees
 the start button.
+
+It also covers the **online menu, which is three short screens rather than one
+long one**. Everything used to be stacked on a single card - room settings, a
+code box and every button - so a phone showed half of it and the half you
+wanted was often below the fold. The first screen now only asks what you came
+to do, and the checks pin that: it opens on the chooser and shows nothing else,
+creating, joining and watching are all offered there, and the room settings
+live on the create page rather than in front of somebody who came to join.
+Join and Watch reach the same code box but must not mean the same thing when it
+is submitted - a seat, or none - so the flag, the button's own wording and the
+title are all checked for both. Back goes up one level rather than hanging up
+on the server, and with nothing typed the Join button says so instead of
+answering a tap with silence.
 
 It also covers the id clash between two clients on one machine. They share
 `user://identity.cfg` and so share a player id whatever their names are; the
@@ -235,6 +255,37 @@ landscape so the prompt could never be right there; that the overlay covers the
 whole screen at any size and swallows input; that the wording mentions rotation
 lock; and that the orientation lock is attempted once, only from a real press,
 and never from a finger lift.
+
+`settings_test.gd` prints `ALL_SETTINGS_OK`. It covers what the app remembers
+between runs and how a player gets characters into a text box - "shell"
+behaviour rather than game rules.
+
+Sorting the hand is off unless it is asked for, which is checked on a freshly
+constructed settings object rather than on the live one: turning it on by
+default would change how the game plays for everybody who never opened the
+menu. Settings are written and read back to prove they survive a restart, the
+panel is checked to open showing what is actually set (not its own defaults),
+and unticking a box has to reach the stored setting rather than only the
+checkbox, because the table reads the setting and never the box. The name typed
+in the panel has to land in `profile.cfg`, since that is where every other
+screen looks for it.
+
+**Text entry on a phone browser** is the other half. Godot draws its own
+`LineEdit` on a canvas, so the browser does not know a text field exists; the
+engine asks for a keyboard and feeds the result through a hidden element, and
+that path only survives keyboards which send ordinary key events. Samsung's
+does. Gboard and iOS Safari compose text - autocorrect, suggestions, swipe -
+and deliver it as an input event, so the keyboard opened and typing went
+nowhere, or on iOS did not open at all. A real `<input>` is now placed over the
+canvas where the field is drawn instead.
+
+The browser half cannot be checked headlessly - there is no page here - so what
+is checked is the part that was actually wrong: **the conditions** that decide
+whether any of it runs (never outside a touch browser, and every entry point
+safe to call anyway, because the screens call them without testing the platform
+themselves), and **the placement maths**, including a field inside a
+`CanvasLayer`, which the game's HUD uses. Getting that wrong is worse than the
+bug it fixes: an invisible input box in the wrong place is one nobody can tap.
 
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
 they wait out the server's real bot and trick-resolve delays; `layout_test.gd`

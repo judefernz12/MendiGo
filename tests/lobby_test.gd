@@ -160,7 +160,8 @@ func identity_conflict_recovery_check() -> void:
 
 func online_menu_check() -> void:
 	# "Allow spectators" was a room flag with no way to take it up. Watching
-	# needs its own door.
+	# needs its own door - and it is now a top-level one, next to creating and
+	# joining, rather than a button tucked under the code box.
 	net.use_local_server = true   # never dial the real server from a test
 	var menu: Control = load("res://scenes/ui/OnlineMenu.tscn").instantiate()
 	root.add_child(menu)
@@ -169,18 +170,54 @@ func online_menu_check() -> void:
 	if menu.watch_button == null:
 		menu.queue_free()
 		return
-	ok(menu.watch_button.get_parent() == menu.join_by_code_button.get_parent(), "the watch button sits with the join controls")
-	ok(menu.watch_button.get_index() == menu.join_by_code_button.get_index() + 1, "directly under Join")
+
+	# The first screen asks what you came to do and nothing else. Everything
+	# used to be on one card, so a phone showed half of it and the room code
+	# box was below the fold.
+	ok(menu.chooser_page.visible, "the online menu opens on the chooser")
+	ok(not menu.create_page.visible and not menu.join_page.visible, "and shows only the chooser")
+	ok(menu.watch_button.get_parent() == menu.chooser_page, "watching is one of the three ways in")
+	ok(menu.go_create_button.get_parent() == menu.chooser_page, "so is creating")
+	ok(menu.go_join_button.get_parent() == menu.chooser_page, "so is joining")
 
 	menu._on_connected_to_server()
 	ok(not menu.watch_button.disabled, "watching is offered once connected")
+
+	# Join and Watch reach the same code box, but they must not mean the same
+	# thing when it is submitted: taking a seat and taking none.
+	menu.go_join_button.pressed.emit()
+	ok(menu.join_page.visible and not menu.chooser_page.visible, "Join opens the code page")
+	ok(not menu.join_as_spectator, "Join asks for a seat")
+	ok(str(menu.join_by_code_button.text) == "Join", "and the button says Join")
+	ok(menu.join_by_code_button.disabled, "with nothing typed there is nothing to join")
+
+	menu.room_code_input.text = "ABCDE"
+	menu._on_room_code_changed("ABCDE")
+	ok(not menu.join_by_code_button.disabled, "a code makes it live")
+
+	# Back goes up one level rather than all the way out - leaving the server
+	# from inside a sub-page was the old Back's only option.
+	menu.back_button.pressed.emit()
+	ok(menu.chooser_page.visible, "Back returns to the chooser")
+	ok(str(menu.title_label.text) == "Play Online", "and the title goes back with it")
+
+	menu.watch_button.pressed.emit()
+	ok(menu.join_page.visible, "Watch opens the same code page")
+	ok(menu.join_as_spectator, "Watch asks for no seat")
+	ok(str(menu.join_by_code_button.text) == "Watch", "and the button says Watch")
+	ok(str(menu.title_label.text).to_lower().contains("watch"), "the title says which one you picked")
 
 	menu.room_code_input.text = ""
 	menu._on_watch_pressed()
 	ok(str(menu.status_label.text).to_lower().contains("code"), "watching without a room code asks for one")
 
+	menu.go_create_button.pressed.emit()
+	ok(menu.create_page.visible and not menu.join_page.visible, "Create opens the room settings on their own page")
+	ok(menu.settings_grid.get_parent() == menu.create_page, "and the settings live there, not on the first screen")
+
 	menu._on_disconnected_from_server()
 	ok(menu.watch_button.disabled, "and is not offered with no connection")
+	ok(menu.go_create_button.disabled and menu.go_join_button.disabled, "nor is creating or joining")
 
 	menu.queue_free()
 	net.disconnect_from_server()   # drop the dial-out this test started

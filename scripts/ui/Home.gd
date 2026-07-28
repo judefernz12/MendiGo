@@ -17,22 +17,41 @@ How a game plays:
 4. Highest trump wins the trick; otherwise highest card of the lead suit.
 5. The trick winner leads the next trick."""
 
+const SETTINGS_PANEL_SCENE := "res://scenes/ui/SettingsPanel.tscn"
+
 @onready var name_input: LineEdit = %NameInput
 @onready var play_online_button: Button = %PlayOnlineButton
 @onready var how_to_play_button: Button = %HowToPlayButton
+@onready var settings_button: Button = %SettingsButton
 @onready var exit_button: Button = %ExitButton
 
 var how_to_play_dialog: AcceptDialog = null
+var settings_panel: Control = null
 
 func _ready() -> void:
 	play_online_button.pressed.connect(_on_play_online_pressed)
 	how_to_play_button.pressed.connect(_on_how_to_play_pressed)
+	settings_button.pressed.connect(_on_settings_pressed)
 	exit_button.pressed.connect(_on_exit_pressed)
 
 	name_input.text = _load_player_name()
+	WebKeyboard.attach(name_input)
+	_build_settings_panel()
 
 	if OS.has_feature("web"):
 		exit_button.visible = false
+
+func _build_settings_panel() -> void:
+	settings_panel = load(SETTINGS_PANEL_SCENE).instantiate()
+	add_child(settings_panel)
+	# The name can be changed in either place, so whichever was used last is
+	# what the other one shows.
+	settings_panel.closed.connect(func():
+		name_input.text = _load_player_name()
+		WebKeyboard.sync(name_input))
+
+func _on_settings_pressed() -> void:
+	settings_panel.open()
 
 func _on_play_online_pressed() -> void:
 	var player_name := name_input.text.strip_edges()
