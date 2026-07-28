@@ -2,3 +2,10 @@
 .godot/
 /android/
 .import/
+
+# Exported builds. The web export alone is a ~38 MB .wasm and a ~17 MB .pck,
+# both rewritten from scratch on every export, so committing them would add
+# tens of megabytes to the repo per rebuild and never let go of any of it.
+# Vercel is deployed with `npx vercel` from builds/mendigo-web, which uploads
+# the folder directly and does not need it to be in git.
+/builds/
