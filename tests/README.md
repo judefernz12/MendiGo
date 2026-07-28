@@ -296,11 +296,27 @@ were two. So a full-screen overlay has to say it is up, and a panel has to
 claim the page while it is open - and a panel that is hidden or freed without
 saying so must not lock every field off the page for the rest of the session.
 
-The engine's own virtual keyboard is only switched off once an input box is
-**confirmed** to be on the page. Taking that on trust is what made the room
-code box dead: one frame where the canvas had no measurable size left the
-overlay hidden for good, nothing retried, and the engine's keyboard had already
-been given up - so tapping the field did nothing whatsoever.
+**Focus is the other half of why the room code box was dead while the name box
+worked.** Godot's own `grab_focus()` on a text field opens the engine's hidden
+input and hands it the keyboard - the exact thing the overlay exists to replace
+- and it cannot be taken back afterwards. Only the room code page ever grabbed
+focus, which is precisely the difference between the two. Screens use
+`WebKeyboard.focus()` instead, which focuses the real input where there is one
+and falls back to `grab_focus()` where there is not; that fallback is checked.
+
+Because of that race the engine's keyboard is switched off the moment a field
+is attached rather than once the overlay is confirmed. The safety net moved
+instead of going: if the overlay cannot be placed for a run of frames the field
+is handed back to the engine, so it behaves as it did before this class existed
+rather than being a box that does nothing. One bad frame is not enough - a
+container has not laid out on the frame it is first shown - but a run of them
+is, and both halves of that are checked.
+
+On the page itself, `place` does not trust its own arithmetic: it asks
+`document.elementFromPoint` whether a tap in the middle of the box would
+actually land on the box, tries once from the top of the stacking order if
+something is over it, and reports failure otherwise. A box that looks right and
+does nothing is the failure worth catching.
 
 `orientation_test.gd` carries a floor on how many checks must run before it may
 call itself green. Adding a reference to one autoload from inside another made

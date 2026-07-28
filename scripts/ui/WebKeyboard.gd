@@ -56,17 +56,25 @@ func attach(line_edit: LineEdit, uppercase: bool = false) -> void:
 	if not _installed:
 		return
 
-	# The engine's own keyboard is deliberately left switched on until the
-	# overlay is confirmed to be on the page. If anything stops the overlay
-	# appearing, the field still behaves the way it did before this class
-	# existed - which works on some phones - instead of being a box that
-	# nothing at all happens when you tap.
 	var id := _next_id
 	_next_id += 1
-	entries.append({
+	var entry := {
 		"id": id, "line_edit": line_edit, "uppercase": uppercase,
-		"rect": Rect2(), "shown": false, "owns_keyboard": false,
-	})
+		"rect": Rect2(), "shown": false, "owns_keyboard": false, "misses": 0,
+	}
+	entries.append(entry)
+
+	# Switched off straight away rather than once the overlay is confirmed.
+	# Waiting left a window in which anything that focused the field - and
+	# grabbing focus on a text box is an ordinary thing for a screen to do -
+	# made the engine open its own hidden input and take the keyboard with it.
+	# Nothing after that could get the keyboard back, which is what made the
+	# room code box impossible to type into while the name box was fine: only
+	# the room code page ever grabbed focus.
+	#
+	# The safety net moved rather than went: if the overlay cannot be placed
+	# for a while, _process hands the engine's keyboard back.
+	_claim_keyboard(entry, line_edit)
 
 	var placeholder := str(line_edit.placeholder_text).replace("'", "")
 	var centred := line_edit.alignment == HORIZONTAL_ALIGNMENT_CENTER
@@ -88,6 +96,20 @@ func sync(line_edit: LineEdit) -> void:
 			continue
 		_eval("window.__mendigoVK.sync(%d, '%s');" % [int(entry.get("id", 0)), str(line_edit.text).replace("'", "")])
 		return
+
+func focus(line_edit: LineEdit) -> void:
+	# Use this instead of grab_focus() on a text field. Godot's own focus opens
+	# the engine's hidden input and hands it the keyboard, which is the exact
+	# thing the overlay exists to replace - and it cannot be taken back.
+	if line_edit == null:
+		return
+	for entry_raw in entries:
+		var entry: Dictionary = entry_raw
+		if entry.get("line_edit", null) != line_edit:
+			continue
+		_eval("window.__mendigoVK.focus(%d);" % int(entry.get("id", 0)))
+		return
+	line_edit.grab_focus()
 
 func detach(line_edit: LineEdit) -> void:
 	for i in range(entries.size() - 1, -1, -1):
@@ -188,10 +210,26 @@ func _process(_delta: float) -> void:
 			viewport_size.x, viewport_size.y])
 		if placed != 1:
 			entry["shown"] = false
+			_note_place_failed(entry)
 			continue
 		entry["rect"] = rect
 		entry["shown"] = true
+		entry["misses"] = 0
 		_claim_keyboard(entry, line_edit)
+
+# How long the overlay may fail to appear before the field is handed back to
+# the engine. Long enough to cover a scene settling in - a container has not
+# laid out on the frame it is first shown - and short enough that nobody sits
+# in front of a box that does nothing.
+const PLACE_FAILURES_BEFORE_GIVING_UP := 30
+
+func _note_place_failed(entry: Dictionary) -> void:
+	entry["misses"] = int(entry.get("misses", 0)) + 1
+	if int(entry["misses"]) < PLACE_FAILURES_BEFORE_GIVING_UP:
+		return
+	# Whatever is wrong is not going to fix itself. Better the field works the
+	# way it did before this class existed than not at all.
+	_release_keyboard(entry)
 
 func _claim_keyboard(entry: Dictionary, line_edit: LineEdit) -> void:
 	# Only now, with a real input box confirmed over the field, is it safe to
@@ -294,6 +332,18 @@ window.__mendigoVK = window.__mendigoVK || (function () {
 		return c.getBoundingClientRect();
 	}
 
+	function ownsPoint(el, x, y) {
+		// Off the visible page counts as covered: a box scrolled or laid out
+		// beyond the window is one nobody can reach either.
+		if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) { return false; }
+		var hit = document.elementFromPoint(x, y);
+		while (hit) {
+			if (hit === el) { return true; }
+			hit = hit.parentElement;
+		}
+		return false;
+	}
+
 	function make(id, placeholder, maxLength, centred, upper) {
 		var el = document.createElement('input');
 		el.type = 'text';
@@ -358,7 +408,23 @@ window.__mendigoVK = window.__mendigoVK || (function () {
 			// smaller field is focused, and the game never zooms back out.
 			el.style.fontSize = Math.max(16, Math.round(h * sy * 0.42)) + 'px';
 			el.style.display = 'block';
+
+			// The whole point is that a tap lands on this element rather than
+			// on the canvas, so ask the page whether it actually would. If
+			// something is over it, try once from the very top of the stack
+			// and then give up and say so, rather than leaving a box that
+			// looks right and does nothing.
+			var cx = box.left + (x + w * 0.5) * sx;
+			var cy = box.top + (y + h * 0.5) * sy;
+			if (!ownsPoint(el, cx, cy)) {
+				el.style.zIndex = '2147483647';
+				if (!ownsPoint(el, cx, cy)) { return 0; }
+			}
 			return 1;
+		},
+		focus: function (id) {
+			var el = fields[id];
+			if (el) { try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); } }
 		},
 		hide: function (id) {
 			var el = fields[id];

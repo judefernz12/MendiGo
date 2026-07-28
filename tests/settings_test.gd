@@ -280,6 +280,27 @@ func web_keyboard_visibility_check() -> void:
 	keyboard._release_keyboard(entry)
 	ok(probe.virtual_keyboard_enabled, "letting go gives the engine's keyboard back")
 
+	# If the overlay cannot be placed it must hand the field back rather than
+	# leave a box that does nothing. One bad frame is not enough - a container
+	# has not laid out on the frame it is first shown - but a run of them is.
+	keyboard._claim_keyboard(entry, probe)
+	entry["misses"] = 0
+	keyboard._note_place_failed(entry)
+	ok(not probe.virtual_keyboard_enabled, "one frame the overlay cannot be placed is not given up on")
+	for _i in range(keyboard.PLACE_FAILURES_BEFORE_GIVING_UP):
+		keyboard._note_place_failed(entry)
+	ok(probe.virtual_keyboard_enabled, "but a field the overlay never reaches goes back to the engine")
+
+	# Focusing a text field must not go through Godot on a phone: its focus
+	# opens the engine's hidden input and takes the keyboard, which cannot then
+	# be handed back. This is what made the room code box dead while the name
+	# box was fine - only the room code page ever grabbed focus.
+	var unattached := LineEdit.new()
+	page.add_child(unattached)
+	await process_frame
+	keyboard.focus(unattached)
+	ok(unattached.has_focus(), "a field the overlay does not own is focused normally")
+
 	page.queue_free()
 	panel.queue_free()
 	await process_frame

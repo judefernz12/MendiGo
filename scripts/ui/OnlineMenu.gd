@@ -102,7 +102,9 @@ func _open_join_page(as_spectator: bool) -> void:
 	room_code_input.text = ""
 	WebKeyboard.sync(room_code_input)
 	_show_page(PAGE_JOIN)
-	room_code_input.grab_focus()
+	# Not grab_focus(): on a phone browser that opens the engine's own hidden
+	# input and hands it the keyboard, and the overlay never gets it back.
+	WebKeyboard.focus(room_code_input)
 
 func _on_back_pressed() -> void:
 	if page != PAGE_CHOOSER:
