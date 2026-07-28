@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3 uid="uid://cmendisetngs01"]
+[gd_scene format=3 uid="uid://c3hxpn0sdfbuq"]
 
 [ext_resource type="Script" path="res://scripts/ui/SettingsPanel.gd" id="1_settings"]
 [ext_resource type="Theme" uid="uid://dtmendithm41a" path="res://assets/ui/app_theme.tres" id="2_theme"]

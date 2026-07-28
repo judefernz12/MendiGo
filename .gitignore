@@ -4,8 +4,10 @@
 .import/
 
 # Exported builds. The web export alone is a ~38 MB .wasm and a ~17 MB .pck,
-# both rewritten from scratch on every export, so committing them would add
-# tens of megabytes to the repo per rebuild and never let go of any of it.
-# Vercel is deployed with `npx vercel` from builds/mendigo-web, which uploads
-# the folder directly and does not need it to be in git.
+# and the Android APK is tens of megabytes more - all rewritten from scratch on
+# every export, so committing them would grow the repo by that much per rebuild
+# and never let go of any of it. Vercel is deployed with `npx vercel` from
+# builds/mendigo-web, which uploads the folder directly, and the APK is handed
+# round as a file. Neither needs to be in git.
 /builds/
+/bin/

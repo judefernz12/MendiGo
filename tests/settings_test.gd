@@ -98,13 +98,29 @@ func settings_panel_check() -> void:
 	ok(panel.fullscreen_row.visible == settings.supports_fullscreen(), "the fullscreen switch is only shown where it works")
 
 	# The name is the one thing here that other screens read, so it has to be
-	# written where they look for it rather than kept in the panel.
+	# written where they look for it rather than kept in the panel. That is a
+	# real file this machine's player uses, so put back whatever was in it -
+	# a test must not leave its own name sitting in somebody's profile.
+	var profile := ConfigFile.new()
+	profile.load("user://profile.cfg")
+	var real_name := str(profile.get_value("player", "name", ""))
+	var net := root.get_node_or_null("NetworkManager")
+	var real_network_name := str(net.local_player_name) if net != null else ""
+
 	panel.name_input.text = "Testy McTest"
 	panel.close()
 	ok(not panel.visible, "Done closes it")
 	var config := ConfigFile.new()
 	config.load("user://profile.cfg")
 	ok(str(config.get_value("player", "name", "")) == "Testy McTest", "and the name typed here is the name that is saved")
+
+	config.set_value("player", "name", real_name)
+	config.save("user://profile.cfg")
+	if net != null:
+		net.local_player_name = real_network_name
+	var restored := ConfigFile.new()
+	restored.load("user://profile.cfg")
+	ok(str(restored.get_value("player", "name", "")) == real_name, "and this check puts the real one back")
 
 	panel.queue_free()
 	await process_frame
