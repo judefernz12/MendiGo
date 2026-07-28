@@ -162,36 +162,81 @@ python -m http.server 8000
 Then open <http://localhost:8000> in your browser. (If you do not have Python,
 the Godot editor's **Remote Debug > Run in Browser** button does the same job.)
 
-### 4c. Put it online at mendigo.fernbuild.com
+### 4c. Put it online with Vercel
 
-The simplest host for a first deploy is **Netlify Drop** — no account needed to
-try it, no build config, drag and drop.
+Vercel has no drag-and-drop page like some hosts, so the route for a plain
+folder of files is the **CLI**. It is still only two commands.
 
-1. Go to <https://app.netlify.com/drop>.
-2. Drag the whole `mendigo-web` folder onto the page.
-3. It gives you a URL like `random-name-123.netlify.app`. Open it on your
-   phone and check the game runs.
-4. Create a free account when prompted, so the site is yours and keeps its URL.
-5. In the Netlify site: **Domain management > Add a domain** →
-   `mendigo.fernbuild.com`. Netlify will tell you to add a DNS record.
-6. In **Namecheap**: Dashboard → Domain List → **Manage** next to
+Do this from inside the export folder, not the project folder — you are
+uploading the built game, not the source.
+
+```powershell
+cd ..\builds\mendigo-web
+npx vercel
+```
+
+(`npx` comes with Node.js. If you do not have it, install Node LTS from
+<https://nodejs.org> first.)
+
+The first run asks a short list of questions:
+
+- **Set up and deploy?** → yes
+- **Which scope?** → your own account
+- **Link to existing project?** → no
+- **Project name** → `mendigo`
+- **In which directory is your code located?** → `./` (you are already in it)
+- **Want to modify the build settings?** → **no**
+
+That last one matters. There is nothing to build — the game is already
+compiled. Vercel should upload the folder as-is. If it tries to detect a
+framework or run a build command, say no.
+
+You get a preview URL like `mendigo-xxxx.vercel.app`. Open it on your phone
+and check the game actually runs before going any further.
+
+When you are happy with it, publish it as the live version:
+
+```powershell
+npx vercel --prod
+```
+
+**Every later update is just `npx vercel --prod` from that same folder** after
+re-exporting from Godot.
+
+#### Point mendigo.fernbuild.com at it
+
+1. In the Vercel dashboard: your project → **Settings → Domains → Add**.
+2. Enter `mendigo.fernbuild.com`.
+3. Vercel shows you the DNS record it wants — for a subdomain that is a
+   **CNAME**, usually to `cname.vercel-dns.com`. **Use the value Vercel shows
+   you**, not the one written here; they have changed it before.
+4. In **Namecheap**: Dashboard → Domain List → **Manage** next to
    `fernbuild.com` → **Advanced DNS** tab → **Add New Record**:
 
    - Type: **CNAME Record**
    - Host: `mendigo`
-   - Value: your Netlify address, e.g. `random-name-123.netlify.app`
+   - Value: whatever Vercel showed in step 3
    - TTL: Automatic
 
-   Save. DNS usually takes 10-30 minutes, occasionally a few hours.
-7. Netlify issues the HTTPS certificate automatically once DNS resolves.
-   **HTTPS is not optional here** — the page must be `https://` and it
-   connects to `wss://`, which browsers require to match.
+   Save. DNS usually takes 10-30 minutes, occasionally a few hours. Vercel's
+   domain page shows "Valid Configuration" once it can see the record.
+5. Vercel issues the HTTPS certificate automatically. **HTTPS is not optional
+   here** — the page is `https://` and connects to `wss://`, and browsers
+   require that pairing.
 
-Cloudflare Pages is an equally good free alternative and is worth switching to
-later if you want push-to-deploy from GitHub. One catch if you do: the Web
-preset exports to `..\builds\`, which is *outside* the git repo, so a
-repo-connected build would not see it. You would need to change the export path
-to somewhere inside the project first.
+#### Two things to watch
+
+- **Deployment size.** The `.wasm` and `.pck` together run to tens of MB. That
+  is fine for a static site, but the free plan does have upload limits and they
+  change from time to time. If a deploy is rejected for size, that is why —
+  check Vercel's current Hobby limits rather than assuming the build is broken.
+- **Do not commit the build to git for push-to-deploy.** Vercel can deploy from
+  GitHub instead of the CLI, but the Web preset exports to `..\builds\`, which
+  is *outside* the repo, so a repo-connected build would find nothing. Moving
+  the export inside the repo would mean committing a fresh multi-tens-of-MB
+  `.wasm` on every rebuild, which bloats the repository permanently. The CLI
+  route keeps build artefacts out of git, which is why it is the one written up
+  here.
 
 ### 4d. Phones in a browser
 
