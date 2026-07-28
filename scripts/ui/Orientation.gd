@@ -61,6 +61,21 @@ func _refresh() -> void:
 	if not watching or overlay == null or not is_instance_valid(overlay):
 		return
 	overlay.visible = is_portrait(get_viewport().get_visible_rect().size)
+	# The text boxes are real HTML elements sitting on top of the canvas, so
+	# this overlay cannot cover them however high its layer is - a name box was
+	# left floating over the "turn your phone sideways" screen. They have to be
+	# taken off the page rather than drawn over.
+	var keyboard := _web_keyboard()
+	if keyboard != null:
+		keyboard.set_blocked(overlay.visible)
+
+func _web_keyboard() -> Node:
+	# Looked up rather than named directly: one autoload cannot refer to
+	# another by name unless it was registered first, and this script is also
+	# instantiated on its own by the tests.
+	if not is_inside_tree():
+		return null
+	return get_tree().root.get_node_or_null("WebKeyboard")
 
 func _input(event: InputEvent) -> void:
 	if not watching or lock_attempted:

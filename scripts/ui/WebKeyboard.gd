@@ -56,13 +56,17 @@ func attach(line_edit: LineEdit, uppercase: bool = false) -> void:
 	if not _installed:
 		return
 
-	# The engine's own virtual keyboard would open a second, hidden field over
-	# the same tap. Only one of them can own the text.
-	line_edit.virtual_keyboard_enabled = false
-
+	# The engine's own keyboard is deliberately left switched on until the
+	# overlay is confirmed to be on the page. If anything stops the overlay
+	# appearing, the field still behaves the way it did before this class
+	# existed - which works on some phones - instead of being a box that
+	# nothing at all happens when you tap.
 	var id := _next_id
 	_next_id += 1
-	entries.append({"id": id, "line_edit": line_edit, "uppercase": uppercase, "rect": Rect2(), "shown": false})
+	entries.append({
+		"id": id, "line_edit": line_edit, "uppercase": uppercase,
+		"rect": Rect2(), "shown": false, "owns_keyboard": false,
+	})
 
 	var placeholder := str(line_edit.placeholder_text).replace("'", "")
 	var centred := line_edit.alignment == HORIZONTAL_ALIGNMENT_CENTER
@@ -90,8 +94,61 @@ func detach(line_edit: LineEdit) -> void:
 		var entry: Dictionary = entries[i]
 		if entry.get("line_edit", null) != line_edit:
 			continue
+		_release_keyboard(entry)
 		_eval("window.__mendigoVK.remove(%d);" % int(entry.get("id", 0)))
 		entries.remove_at(i)
+
+# --- what may be on screen --------------------------------------------------
+
+# An HTML element sits on top of the canvas, so nothing drawn inside the game
+# can cover it. Anything the game puts over the whole screen has to say so.
+var blocked: bool = false
+# While something is exclusive - a dialog, a settings panel - only the fields
+# inside it may show. Without this the screen underneath keeps its boxes and
+# the player gets two stacked on top of each other.
+var exclusive: Array = []
+
+func set_blocked(on: bool) -> void:
+	blocked = on
+
+func push_exclusive(node: Node) -> void:
+	if node == null or exclusive.has(node):
+		return
+	exclusive.append(node)
+
+func pop_exclusive(node: Node) -> void:
+	exclusive.erase(node)
+
+func top_exclusive() -> Node:
+	# Anything freed or hidden since it was pushed no longer counts, so a panel
+	# that goes away without saying so cannot lock every field off the screen.
+	for i in range(exclusive.size() - 1, -1, -1):
+		var node = exclusive[i]
+		if node == null or not is_instance_valid(node):
+			exclusive.remove_at(i)
+			continue
+		if node is CanvasItem and not (node as CanvasItem).is_visible_in_tree():
+			continue
+		return node
+	return null
+
+func should_show(line_edit: LineEdit) -> bool:
+	if line_edit == null or not is_instance_valid(line_edit):
+		return false
+	if blocked:
+		return false
+	if not line_edit.is_visible_in_tree():
+		return false
+	var top := top_exclusive()
+	return top == null or _is_within(line_edit, top)
+
+func _is_within(node: Node, ancestor: Node) -> bool:
+	var walk: Node = node
+	while walk != null:
+		if walk == ancestor:
+			return true
+		walk = walk.get_parent()
+	return false
 
 func _process(_delta: float) -> void:
 	if entries.is_empty():
@@ -109,11 +166,9 @@ func _process(_delta: float) -> void:
 			continue
 
 		var id := int(entry.get("id", 0))
-		var visible_now: bool = line_edit.is_visible_in_tree()
-		if not visible_now:
+		if not should_show(line_edit):
 			if bool(entry.get("shown", false)):
 				entry["shown"] = false
-				entries[i] = entry
 				_eval("window.__mendigoVK.hide(%d);" % id)
 			continue
 
@@ -122,12 +177,38 @@ func _process(_delta: float) -> void:
 		# frame and each call crosses into JavaScript.
 		if bool(entry.get("shown", false)) and (entry.get("rect", Rect2()) as Rect2).is_equal_approx(rect):
 			continue
-		entry["rect"] = rect
-		entry["shown"] = true
-		entries[i] = entry
-		_eval("window.__mendigoVK.place(%d, %f, %f, %f, %f, %f, %f);" % [
+
+		# The page gets the last word on whether the box is really up: it can
+		# refuse, most often because the canvas has no measurable size yet
+		# while a scene is still settling. Taking success on trust left the
+		# field hidden for good - one failed frame and nothing ever retried,
+		# which is what made the room code box impossible to type into.
+		var placed := _eval_int("window.__mendigoVK.place(%d, %f, %f, %f, %f, %f, %f);" % [
 			id, rect.position.x, rect.position.y, rect.size.x, rect.size.y,
 			viewport_size.x, viewport_size.y])
+		if placed != 1:
+			entry["shown"] = false
+			continue
+		entry["rect"] = rect
+		entry["shown"] = true
+		_claim_keyboard(entry, line_edit)
+
+func _claim_keyboard(entry: Dictionary, line_edit: LineEdit) -> void:
+	# Only now, with a real input box confirmed over the field, is it safe to
+	# switch the engine's own keyboard off. Two of them over one tap would
+	# fight; none of them is worse.
+	if bool(entry.get("owns_keyboard", false)):
+		return
+	entry["owns_keyboard"] = true
+	line_edit.virtual_keyboard_enabled = false
+
+func _release_keyboard(entry: Dictionary) -> void:
+	if not bool(entry.get("owns_keyboard", false)):
+		return
+	entry["owns_keyboard"] = false
+	var line_edit = entry.get("line_edit", null)
+	if line_edit != null and is_instance_valid(line_edit):
+		line_edit.virtual_keyboard_enabled = true
 
 func screen_rect_of(line_edit: LineEdit) -> Rect2:
 	# In viewport pixels, including whatever canvas transform is above it, so
@@ -141,6 +222,12 @@ func _eval(code: String) -> void:
 	if not _installed:
 		return
 	JavaScriptBridge.eval(code, true)
+
+func _eval_int(code: String) -> int:
+	if not _installed:
+		return 0
+	var answer = JavaScriptBridge.eval(code, true)
+	return int(answer) if answer != null else 0
 
 func _install() -> void:
 	if _installed or not is_active():
@@ -257,7 +344,10 @@ window.__mendigoVK = window.__mendigoVK || (function () {
 		place: function (id, x, y, w, h, viewW, viewH) {
 			var el = fields[id];
 			var box = canvasBox();
-			if (!el || !box || !viewW || !viewH) { return; }
+			// Answered rather than assumed: the caller retries on a 0, so a
+			// canvas that has not been measured yet only costs a frame.
+			if (!el || !box || !viewW || !viewH) { return 0; }
+			if (!box.width || !box.height) { return 0; }
 			var sx = box.width / viewW;
 			var sy = box.height / viewH;
 			el.style.left = (box.left + x * sx) + 'px';
@@ -268,6 +358,7 @@ window.__mendigoVK = window.__mendigoVK || (function () {
 			// smaller field is focused, and the game never zooms back out.
 			el.style.fontSize = Math.max(16, Math.round(h * sy * 0.42)) + 'px';
 			el.style.display = 'block';
+			return 1;
 		},
 		hide: function (id) {
 			var el = fields[id];

@@ -133,9 +133,21 @@ func overlay_check() -> void:
 
 	probe.queue_free()
 
+# A floor on how much this suite has to have done before it may call itself
+# green. Adding a reference to another autoload inside Orientation.gd once made
+# the script fail to compile here, so the probe was never built, almost every
+# check was skipped - and the suite still printed OK, having run one check out
+# of thirty-one. Silence is the failure mode worth guarding against.
+const MIN_CHECKS := 30
+
 func _report() -> void:
 	print("")
 	print("CHECKS RUN: ", checks)
+	if checks < MIN_CHECKS:
+		print("FAILURES: 1")
+		print(" - only %d checks ran, expected at least %d - the suite did not finish" % [checks, MIN_CHECKS])
+		quit(1)
+		return
 	if fails.is_empty():
 		print("ALL_ORIENTATION_OK")
 		quit(0)

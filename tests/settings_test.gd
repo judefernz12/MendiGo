@@ -30,6 +30,7 @@ func _run() -> void:
 	await auto_sort_check()
 	web_keyboard_conditions_check()
 	await web_keyboard_placement_check()
+	await web_keyboard_visibility_check()
 	_report()
 
 # --- what is remembered -----------------------------------------------------
@@ -212,6 +213,75 @@ func web_keyboard_placement_check() -> void:
 
 	holder.queue_free()
 	layer.queue_free()
+	await process_frame
+
+func web_keyboard_visibility_check() -> void:
+	# An HTML input sits on top of the canvas, so nothing the game draws can
+	# cover it. Every case below was a real box left floating on a phone.
+	var keyboard := root.get_node_or_null("WebKeyboard")
+	if keyboard == null:
+		return
+
+	var page := Control.new()
+	root.add_child(page)
+	var page_field := LineEdit.new()
+	page.add_child(page_field)
+
+	var panel := Control.new()
+	root.add_child(panel)
+	var panel_field := LineEdit.new()
+	panel.add_child(panel_field)
+	panel.visible = false
+	await process_frame
+
+	ok(keyboard.should_show(page_field), "a field on the open screen is shown")
+	ok(not keyboard.should_show(panel_field), "one on a hidden panel is not")
+
+	# Opening the settings panel: the screen underneath is still visible, so
+	# without this both name boxes were on screen, stacked.
+	panel.visible = true
+	keyboard.push_exclusive(panel)
+	await process_frame
+	ok(keyboard.should_show(panel_field), "opening a panel shows its own field")
+	ok(not keyboard.should_show(page_field), "and takes the one underneath off the page")
+
+	keyboard.pop_exclusive(panel)
+	panel.visible = false
+	await process_frame
+	ok(keyboard.should_show(page_field), "closing it gives the screen underneath its field back")
+
+	# A panel that is freed or hidden without saying so must not lock every
+	# field off the page for the rest of the session.
+	keyboard.push_exclusive(panel)
+	ok(keyboard.should_show(page_field), "a panel hidden without closing does not hold the page hostage")
+	keyboard.pop_exclusive(panel)
+
+	# The rotate prompt: a CanvasLayer at 128 still cannot cover an HTML
+	# element, so the name box floated over "turn your phone sideways".
+	keyboard.set_blocked(true)
+	ok(not keyboard.should_show(page_field), "nothing shows while the rotate prompt is up")
+	keyboard.set_blocked(false)
+	ok(keyboard.should_show(page_field), "and it comes back when the phone is turned")
+
+	ok(not keyboard.should_show(null), "a field that has gone away shows nothing")
+
+	# The engine's own keyboard is only given up once an input box is confirmed
+	# to be on the page. Taking that on trust is what made the room code box
+	# dead: one frame where the canvas had no measurable size left the overlay
+	# hidden for good, and the engine's keyboard had already been switched off,
+	# so tapping the field did nothing at all.
+	var probe := LineEdit.new()
+	page.add_child(probe)
+	var entry := {"line_edit": probe, "owns_keyboard": false}
+	ok(probe.virtual_keyboard_enabled, "a field starts with the engine's keyboard on")
+	keyboard._claim_keyboard(entry, probe)
+	ok(not probe.virtual_keyboard_enabled, "confirming the overlay hands the keyboard over")
+	ok(bool(entry["owns_keyboard"]), "and the overlay knows it owns it")
+	keyboard._release_keyboard(entry)
+	ok(probe.virtual_keyboard_enabled, "letting go gives the engine's keyboard back")
+
+	page.queue_free()
+	panel.queue_free()
 	await process_frame
 
 func _report() -> void:

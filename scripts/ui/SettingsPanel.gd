@@ -33,10 +33,16 @@ func open() -> void:
 	auto_sort_check.set_pressed_no_signal(GameSettings.auto_sort_hand)
 	fullscreen_row.visible = GameSettings.supports_fullscreen()
 	visible = true
+	# This panel is drawn over the screen that opened it, but that screen's own
+	# text boxes are HTML elements on top of the canvas and carry on showing
+	# through - which put two name boxes on screen at once. Claim the page
+	# while this is up.
+	WebKeyboard.push_exclusive(self)
 	close_button.grab_focus()
 
 func close() -> void:
 	_save_player_name(name_input.text.strip_edges())
+	WebKeyboard.pop_exclusive(self)
 	visible = false
 	emit_signal("closed")
 

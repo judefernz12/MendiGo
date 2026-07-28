@@ -287,6 +287,28 @@ themselves), and **the placement maths**, including a field inside a
 `CanvasLayer`, which the game's HUD uses. Getting that wrong is worse than the
 bug it fixes: an invisible input box in the wrong place is one nobody can tap.
 
+**Which boxes may be on screen** is the other half, and every case here was one
+left floating on a real phone. An HTML element sits on top of the canvas, so
+nothing the game draws can cover it: the rotate prompt is a `CanvasLayer` at
+128 and a name box still floated over "turn your phone sideways"; opening the
+settings panel left the screen underneath showing its own name box, so there
+were two. So a full-screen overlay has to say it is up, and a panel has to
+claim the page while it is open - and a panel that is hidden or freed without
+saying so must not lock every field off the page for the rest of the session.
+
+The engine's own virtual keyboard is only switched off once an input box is
+**confirmed** to be on the page. Taking that on trust is what made the room
+code box dead: one frame where the canvas had no measurable size left the
+overlay hidden for good, nothing retried, and the engine's keyboard had already
+been given up - so tapping the field did nothing whatsoever.
+
+`orientation_test.gd` carries a floor on how many checks must run before it may
+call itself green. Adding a reference to one autoload from inside another made
+`Orientation.gd` fail to compile there, so the probe was never built and nearly
+every check was skipped - and the suite still printed OK, having run one check
+out of thirty-one. A suite that goes quiet and passes is worse than one that
+fails.
+
 `rules_test.gd`, `render_test.gd` and `layout_test.gd` take 1-3 minutes because
 they wait out the server's real bot and trick-resolve delays; `layout_test.gd`
 runs three whole tables (4, 6 and 8 players), so it is the slowest. The rest
