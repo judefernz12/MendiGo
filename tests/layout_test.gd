@@ -15,8 +15,10 @@ const ALLOWED_OVERLAP := 6.0
 # The resolution the game ships at (project.godot). Headless always comes up
 # with a square window and refuses to resize, so both the 3D projection and
 # the anchored HUD rects are recomputed for this size instead of being read
-# off the live viewport.
-const VIEW := Vector2(1280, 720)
+# off the live viewport. It is a var because check_aspect_ratios re-measures
+# the table at the other shapes a real window can be; it is put back after.
+const BASE_VIEW := Vector2(1280, 720)
+var VIEW := BASE_VIEW
 
 var server: Node
 var room_ui: Node
@@ -91,8 +93,11 @@ func control_rect(control: Control) -> Rect2:
 
 func plate_rect(view_name: String) -> Rect2:
 	# The scene places nameplates through the live (square) viewport, so ask
-	# the same placement routine using this test's projection instead.
-	var size: Vector2 = room_ui.NAMEPLATE_SIZE
+	# the same placement routine using this test's projection instead. Measure
+	# the plate at the size it is really drawn at: a Label grows to fit its text
+	# and its own margins, so NAMEPLATE_SIZE is a floor rather than the truth.
+	var live = room_ui.nameplates.get(view_name, null)
+	var size: Vector2 = live.size if live != null else Vector2(room_ui.NAMEPLATE_SIZE)
 	return Rect2(room_ui._nameplate_position(view_name, projector(), size, VIEW), size)
 
 func card_rect_at(local_position: Vector3, rotation: Vector3 = Vector3(90, 0, 0), card_scale: float = 1.0) -> Rect2:
@@ -241,7 +246,44 @@ func check_table(player_count: int, net: Node) -> void:
 
 	ok(room_ui.seat_order.size() == player_count, "the table is laid out for %d seats" % player_count)
 	measure(player_count)
+	check_aspect_ratios()
 	await check_spectator_plates(player_count, net)
+
+func check_aspect_ratios() -> void:
+	# The game is designed at 1280x720 but stretches with "expand", so the
+	# viewport is whatever shape the window or the browser tab happens to be: a
+	# phone held sideways is about 1560x720, a laptop is often taller than 16:9.
+	#
+	# The camera keeps its vertical FOV, which means the seats do not move when
+	# the window widens - the extra pixels all arrive as margin down the sides.
+	# So anything deciding "is this seat up the side of the screen?" has to
+	# measure against the height. It used to measure against the width, and on a
+	# phone that pushed the goalposts out past seats that had not moved: the
+	# side seats were treated as centre seats, their names were placed under
+	# their own cards, pushed down past the neighbouring seat's cards, and two
+	# names ended up in the same place. The other way round - a window taller
+	# than 16:9 - the side margin gets too narrow to hold a plate at all, and it
+	# was clamped back on top of the cards it belongs to.
+	var shipped := VIEW
+	for size in [Vector2(1560, 720), Vector2(1707, 720), Vector2(1280, 800), Vector2(1280, 960)]:
+		VIEW = size
+		var at := "  at %.0fx%.0f" % [size.x, size.y]
+		var plates: Array = []
+		var cards: Array = []
+		for view_raw in room_ui.seat_order:
+			var view := str(view_raw)
+			if room_ui.nameplates.has(view):
+				plates.append(plate_rect(view))
+			cards.append_array(rects_of(room_ui.hand_cards.get(view, [])))
+		no_self_clash(plates, "two nameplates do not sit on each other" + at)
+		none_clash(plates, cards, "nameplates stay clear of the cards" + at)
+		var screen := Rect2(Vector2.ZERO, size)
+		var off := 0
+		for r_raw in plates:
+			if not screen.encloses(r_raw as Rect2):
+				off += 1
+		ok(off == 0, "every nameplate stays inside the screen%s (%d off)" % [at, off])
+	VIEW = shipped
 
 func check_spectator_plates(player_count: int, net: Node) -> void:
 	# A watcher's table has one more nameplate than a player's: the bottom seat

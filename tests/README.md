@@ -72,7 +72,8 @@ correctly. It feeds real server snapshots into the real game scene and checks:
   from their anchors so it cannot see it happen
 - a watcher gets a nameplate for every seat, the bottom one included, showing
   that player's real name - it used to be skipped, because for a player the
-  bottom seat is themselves, which was the one missing name tag
+  bottom seat is themselves, which was the one missing name tag. That plate
+  shares the bottom strip with the WATCHING badge, which used to clip it
 - the same table, opened as a spectator, gives nothing away and does nothing:
   the seat drawn at the bottom belongs to somebody else, so it must stay face
   down, capped like every other seat, unclickable and named rather than called
@@ -130,7 +131,27 @@ pulled back - at y 6.7 a card drops to about 95 px and stops being readable.
 Headless always comes up with a square window and refuses to resize, so this
 test recomputes both the camera projection and the anchored HUD rects for the
 shipping 1280x720 instead of reading the live viewport. Change the resolution
-in `project.godot` and `VIEW` in the test has to change with it.
+in `project.godot` and `BASE_VIEW` in the test has to change with it.
+
+**The whole table is then re-measured at the other shapes a window can be** -
+1560x720 and 1707x720 (a phone held sideways), 1280x800 and 1280x960 (a laptop
+or a browser window taller than 16:9). The game is designed at 1280x720 but
+stretches with `expand`, so the viewport is whatever shape the window is, and
+measuring only the design size hid a bug on every phone. The camera keeps its
+vertical FOV, so widening a window does not move the seats - the extra pixels
+all arrive as margin down the sides - which means anything deciding "is this
+seat up the side of the screen?" has to measure against the **height**. It
+measured against the width, so on a phone the goalposts moved out past seats
+that had not moved: the side seats were treated as centre seats, their names
+were placed under their own cards, pushed down past the neighbouring seat's
+cards, and two names landed in the same spot (118x24 px of overlap on an
+8-player table). Taller than 16:9 the same routine failed the other way, with
+the side margin too narrow to hold a plate at all and the plate clamped back on
+top of the cards it belongs to.
+
+Nameplates are measured at the size they are really drawn at rather than at
+`NAMEPLATE_SIZE`, which is only a floor: a `Label` grows to fit its text, and a
+long name with `(Dealer)` after it is a good deal wider than the constant.
 
 `trump_test.gd` prints `ALL_TRUMP_OK`. It walks the real game scene through the
 whole closed-trump life cycle with hand-built snapshots, so it does not have to

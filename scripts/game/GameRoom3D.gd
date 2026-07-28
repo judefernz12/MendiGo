@@ -52,6 +52,13 @@ const CARD_H := 0.742
 const NAMEPLATE_SIZE := Vector2(140, 22)
 const NAMEPLATE_GAP := 8.0
 
+# How far from the centre of the screen a seat has to sit before its name goes
+# in the side margin instead of under its cards, as a fraction of the viewport's
+# *height*. Height, not width - see _nameplate_position for why. 0.533 is the
+# old 0.30 of the width restated at the 1280x720 the game is designed against,
+# so the table looks exactly as it did there and stops drifting everywhere else.
+const SIDE_SEAT_MARGIN := 0.533
+
 # Animation timing.
 const DEAL_TIME := 0.22
 const DEAL_STAGGER := 0.06
@@ -390,6 +397,17 @@ func _card_screen_rect(card: Node3D, project: Callable) -> Rect2:
 			rect = rect.expand(point)
 	return rect
 
+func _clash_area(rect: Rect2, others: Array) -> float:
+	# Total overlapping area, ignoring the same few pixels of touching that
+	# _rect_clashes ignores. Used to rank nameplate spots so that a table with
+	# no clear spot left still picks the least-bad one.
+	var total := 0.0
+	for other_raw in others:
+		var hit := rect.intersection(other_raw as Rect2)
+		if hit.size.x > 6.0 and hit.size.y > 6.0:
+			total += hit.size.x * hit.size.y
+	return total
+
 func _rect_clashes(rect: Rect2, others: Array) -> bool:
 	# The same tolerance the layout checks use: a few pixels of touching is not
 	# a collision worth moving anything for.
@@ -451,30 +469,51 @@ func _nameplate_position(view_name: String, project: Callable, plate_size: Vecto
 	var seat := _seat_screen_rect(view_name, project)
 	var side_offset := seat.get_center().x - screen.x * 0.5
 
-	if absf(side_offset) > screen.x * 0.30:
+	# The camera keeps its vertical FOV, so how far a seat lands from the centre
+	# of the screen is decided by the viewport's *height*: widen the window and
+	# the seats stay exactly where they are, the extra pixels arriving as margin
+	# down each side. Measuring this against the width - which "expand" stretch
+	# grows on anything wider than 16:9, i.e. every phone in landscape - moved
+	# the goalposts away from seats that had not moved, so the side seats fell
+	# through to the branch below, were placed under their own cards, and were
+	# then pushed down on top of their neighbour's name.
+	if absf(side_offset) > screen.y * SIDE_SEAT_MARGIN:
 		# Seats stacked up the side of the screen (6- and 8-player tables) have
 		# another seat directly below them, so their name goes beside the cards
 		# in the empty margin rather than under them.
 		var to_right := side_offset > 0.0
-		var y := clampf(seat.get_center().y - plate_size.y * 0.5, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))
-		var outer := clampf(seat.end.x + NAMEPLATE_GAP if to_right else seat.position.x - NAMEPLATE_GAP - plate_size.x,
-			6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
-		var inner := clampf(seat.position.x - NAMEPLATE_GAP - plate_size.x if to_right else seat.end.x + NAMEPLATE_GAP,
-			6.0, maxf(6.0, screen.x - plate_size.x - 6.0))
+		var top_y := 6.0
+		var bottom_y := maxf(6.0, screen.y - plate_size.y - 6.0)
+		var y := clampf(seat.get_center().y - plate_size.y * 0.5, top_y, bottom_y)
+		var max_x := maxf(6.0, screen.x - plate_size.x - 6.0)
+		var outer := clampf(seat.end.x + NAMEPLATE_GAP if to_right else seat.position.x - NAMEPLATE_GAP - plate_size.x, 6.0, max_x)
+		var inner := clampf(seat.position.x - NAMEPLATE_GAP - plate_size.x if to_right else seat.end.x + NAMEPLATE_GAP, 6.0, max_x)
 
-		# Those margins are also where the captured piles and 10s live, and the
-		# inner one runs into the trick on a crowded table. Try the outer side,
-		# then the inner, then slide along the outer side until it is clear.
-		var zones: Array = avoid if not avoid.is_empty() else _pile_zone_rects(project)
+		# Those margins are also where the captured piles and 10s live, the
+		# inner one runs into the trick on a crowded table, and on a window
+		# taller than 16:9 the outer one can be too narrow to hold the plate at
+		# all - the clamp above then drags it back over the seat's own cards.
+		# So the cards are checked as well, and if nothing is completely clear
+		# the least-bad spot wins rather than a fixed one that may be the worst.
+		var zones: Array = (avoid if not avoid.is_empty() else _pile_zone_rects(project)).duplicate()
+		for other_raw in seat_order:
+			zones.append(_seat_screen_rect(str(other_raw), project))
 		var candidates: Array = [Vector2(outer, y), Vector2(inner, y)]
-		for step in [1.0, -1.0]:
-			for distance in [0.6, 1.2, 1.8]:
-				candidates.append(Vector2(outer, clampf(y + step * plate_size.y * distance * 2.0, 6.0, maxf(6.0, screen.y - plate_size.y - 6.0))))
+		for column in [outer, inner]:
+			for step in [1.0, -1.0]:
+				for distance in [0.6, 1.2, 1.8]:
+					candidates.append(Vector2(column, clampf(y + step * plate_size.y * distance * 2.0, top_y, bottom_y)))
+		var best: Vector2 = candidates[0]
+		var best_clash := INF
 		for spot_raw in candidates:
 			var spot: Vector2 = spot_raw
-			if not _rect_clashes(Rect2(spot, plate_size), zones):
+			var clash := _clash_area(Rect2(spot, plate_size), zones)
+			if clash <= 0.0:
 				return spot
-		return Vector2(outer, y)
+			if clash < best_clash:
+				best_clash = clash
+				best = spot
+		return best
 
 	# Everyone else sits just under the cards they belong to, stepping past any
 	# other seat's cards that happen to be in the way.
@@ -2677,8 +2716,12 @@ func _build_spectator_badge() -> void:
 	spectator_badge.anchor_bottom = 1.0
 	spectator_badge.offset_left = -110.0
 	spectator_badge.offset_right = 110.0
-	spectator_badge.offset_top = -70.0
-	spectator_badge.offset_bottom = -28.0
+	# Sits below the bottom seat's nameplate, not across it. A watcher is the
+	# only one who gets a name on the bottom seat - it belongs to a real player
+	# rather than to them - and it lands in this same strip, so the badge used
+	# to clip the top of it.
+	spectator_badge.offset_top = -54.0
+	spectator_badge.offset_bottom = -12.0
 	spectator_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(spectator_badge)
 
